@@ -1,0 +1,15 @@
+.venv/
+.git/
+.vscode/
+.pytest_cache/
+.coverage
+__pycache__/
+*.egg-info/
+.env
+.env.*
+!.env.example
+spike/
+tests/
+frontend/node_modules/
+frontend/dist/
+*.md

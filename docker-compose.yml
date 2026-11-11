@@ -1,0 +1,39 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ipmon
+      POSTGRES_DB: ipmon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ipmon -d ipmon"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    # No ports are published: only the app container can reach the database.
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Overrides any DATABASE_URL in .env (that one is for running outside Docker).
+      DATABASE_URL: postgresql://ipmon:${POSTGRES_PASSWORD}@db:5432/ipmon
+    ports:
+      # Bound to this machine only. To reach it from the company network, change
+      # 127.0.0.1 to the host's LAN address (never expose it to the public internet).
+      - "127.0.0.1:8000:8000"
+    # Lets the unprivileged container user send ICMP echo requests.
+    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"
+    cap_add:
+      - NET_RAW
+
+volumes:
+  pgdata:
