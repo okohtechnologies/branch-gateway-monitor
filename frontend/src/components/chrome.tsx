@@ -28,12 +28,25 @@ export function useProblemCounts(): { down: number; degraded: number } {
   }, [snapshots]);
 }
 
-/** Live / Stale / Reconnecting: how much to trust what is on screen. */
-export function useLiveState() {
+/**
+ * A warning about the live connection, or null while everything is fine. There is deliberately no
+ * "Live" badge: a healthy dashboard says nothing, and only trouble is shown.
+ */
+export function useLiveState(): { label: string; tip: string; pulse: boolean } | null {
   const { stale, connected } = useFreshness();
-  if (!connected) return { label: "Reconnecting", dot: "bg-degraded motion-safe:animate-pulse", tip: "Live updates disconnected, retrying" };
-  if (stale) return { label: "Stale", dot: "bg-degraded", tip: "No recent probe results" };
-  return { label: "Live", dot: "bg-up", tip: "Receiving live updates" };
+  if (!connected) return { label: "Offline, reconnecting", tip: "Live updates are disconnected. Retrying.", pulse: true };
+  if (stale) return { label: "Stale data", tip: "No recent probe results are arriving.", pulse: false };
+  return null;
+}
+
+/** An amber warning dot. When `pulse` is set a soft ring radiates from it (off for reduced motion). */
+export function WarningDot({ pulse, className = "size-3" }: { pulse: boolean; className?: string }) {
+  return (
+    <span className={`relative flex shrink-0 ${className}`} aria-hidden>
+      {pulse && <span className="absolute inline-flex size-full rounded-full bg-degraded opacity-60 motion-safe:animate-ping" />}
+      <span className="relative inline-flex size-full rounded-full bg-degraded" />
+    </span>
+  );
 }
 
 /** Things that need attention, stacked: undelivered alerts, monitor offline, or branches in trouble. */

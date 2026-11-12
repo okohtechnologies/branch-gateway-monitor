@@ -3,7 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { Activity, LogOut, Moon, PanelLeftClose, PanelLeftOpen, ShieldOff, Sun } from "lucide-react";
 import { useAuth } from "../auth";
 import { useTheme } from "../theme";
-import { NAV, navActive, SignOutEverywhereDialog, useLiveState } from "./chrome";
+import { NAV, navActive, SignOutEverywhereDialog, useLiveState, WarningDot } from "./chrome";
 
 const ENTER_DELAY_MS = 100; // small delay so a pointer merely passing the edge does not open it
 const LEAVE_DELAY_MS = 250; // and a brief slip off it does not slam it shut
@@ -119,11 +119,17 @@ export function Sidebar({ pinned, onTogglePin }: { pinned: boolean; onTogglePin:
         </nav>
 
         <div className="mt-auto flex flex-col gap-1 border-t border-line pt-2">
-          <div className={`${ROW} text-muted`} role="status" title={live.tip}>
-            <Icon>
-              <span className={`size-2.5 rounded-full ${live.dot}`} aria-hidden />
-            </Icon>
-            <Label show={expanded}>{live.label}</Label>
+          {/* Silent while all is well. The container is always present so that, when the connection drops,
+              screen readers announce the warning that appears inside it. */}
+          <div role="status">
+            {live && (
+              <div className={`${ROW} text-degraded`} title={live.tip}>
+                <Icon>
+                  <WarningDot pulse={live.pulse} />
+                </Icon>
+                <Label show={expanded}>{live.label}</Label>
+              </div>
+            )}
           </div>
 
           <div className={`${ROW} text-muted`} title={user?.email}>

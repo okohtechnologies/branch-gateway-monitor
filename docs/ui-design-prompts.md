@@ -53,8 +53,8 @@ hostnames.
 
 LIVE DATA
 Values update every 30 s over a WebSocket without page reload. Design how a value changes
-(subtle highlight, no layout shift), a "Live" connection indicator in the header with a
-"Reconnecting" state, and "Updated 12s ago" freshness text. Stale data must look stale.
+(subtle highlight, no layout shift), no "Live" badge (health is silent) but an "Offline, reconnecting" warning
+that appears only when the connection drops, and "Updated 12s ago" freshness text. Stale data must look stale.
 
 RESPONSIVE + ACCESSIBILITY
 - Design mobile first: 375px phone, 768px tablet, 1440px desktop. Touch targets at least 44px.
@@ -90,7 +90,7 @@ Design the application shell that wraps every screen after login.
 CONTENT
 - Product name "Branch Monitor" (small wordmark, no logo art).
 - Primary navigation: Overview, Branches, Incidents, Settings.
-- Right side: a live-connection indicator (Live / Reconnecting, with a dot and text), a
+- Right side: an offline warning that only appears when the live connection drops (dot and text; nothing while healthy), a
   light/dark theme toggle, and an account menu showing the signed-in email with "Sign out".
 - A global status strip that appears ABOVE the page content only when something needs
   attention: "1 down · 1 degraded" with a link to the affected branches, always visible while

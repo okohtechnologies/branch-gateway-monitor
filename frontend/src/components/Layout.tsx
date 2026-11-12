@@ -7,7 +7,7 @@ import { useLive } from "../live";
 import { useTheme } from "../theme";
 import { Modal } from "./Modal";
 import { Sidebar } from "./Sidebar";
-import { Banners, NAV, navActive, useLiveState, useProblemCounts } from "./chrome";
+import { Banners, NAV, navActive, useLiveState, useProblemCounts, WarningDot } from "./chrome";
 
 const PIN_CHOICES = ["pinned", "auto"] as const;
 
@@ -85,9 +85,13 @@ function MobileHeader() {
           <Activity className="size-5 text-accent" aria-hidden />
           Branch Monitor
         </Link>
-        <span className="flex items-center gap-1.5 text-xs font-medium text-muted" role="status" title={live.tip}>
-          <span className={`size-2 rounded-full ${live.dot}`} aria-hidden />
-          {live.label}
+        <span role="status">
+          {live && (
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-degraded" title={live.tip}>
+              <WarningDot pulse={live.pulse} className="size-2.5" />
+              {live.label}
+            </span>
+          )}
         </span>
         <button onClick={toggleTheme} className="icon-btn" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
           {theme === "dark" ? <Sun className="size-5" aria-hidden /> : <Moon className="size-5" aria-hidden />}

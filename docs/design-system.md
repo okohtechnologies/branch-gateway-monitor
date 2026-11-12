@@ -76,7 +76,9 @@ action), error (announced, with Try again) and stale states.
 
 ## Behaviour rules
 
-- **Live data states its age.** The header shows Live, Stale or Reconnecting. Overview shows
+- **Trouble is shown; health is silent.** There is no "Live" badge. The sidebar (the header on phones)
+  shows "Offline, reconnecting" or "Stale data" only when something is wrong, and screen readers
+  announce it when it appears. Overview also shows
   "Updated 3s ago", and turns amber when no probe has arrived for about three intervals.
 - **Screen readers hear changes, not noise.** A polite live region announces status *changes* only,
   never every 5-second refresh.
