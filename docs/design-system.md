@@ -90,6 +90,19 @@ action), error (announced, with Try again) and stale states.
 - Motion is subtle (150 to 200 ms colour transitions); the only looping animation is a gentle pulse
   on Down, and everything respects `prefers-reduced-motion`.
 
+## Settings screen
+
+- One card per concern (Monitoring, Alerts and data, Telegram, Monitor health, Account) with a section
+  index on desktop and stacked cards on phones. Each editable card has its own **Save changes** (disabled
+  until something changes), **Discard**, and an "unsaved changes" notice.
+- Every number shows its allowed range's effect in plain language: the Monitoring card says "An outage is
+  alerted after about 20 seconds" and warns when the numbers cannot work together. Every field shows its
+  default and offers **Reset to default**, which removes the override rather than pinning the default.
+- Mistakes are caught before sending, in the field, in words; focus moves to the first problem. A save is
+  all-or-nothing, and an edit that cannot be applied changes nothing.
+- Read-only status (Telegram, Monitor health) uses the same icon shapes as branch status, never colour alone.
+- Secrets are never shown or editable: the chat ID is masked to its last four digits.
+
 ## Where we deviated from the skill's output
 
 - Its accent was green; we use blue, because green is reserved for status (above).

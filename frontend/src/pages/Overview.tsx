@@ -273,7 +273,7 @@ const BranchCard = memo(function BranchCard({ b }: { b: Branch }) {
           <Metric label="Loss" value={b.status === "PENDING" || b.status === "DISABLED" ? "—" : fmtLoss(b.loss_pct)} tone={(b.loss_pct ?? 0) > 0 ? "text-degraded" : ""} />
           <Metric label="24h uptime" value={fmtUptime(b.uptime_24h)} />
         </dl>
-        <Sparkline points={b.spark} />
+        <Sparkline points={b.spark} warnMs={b.latency_warn_ms} />
       </div>
 
       <p className="mt-3 truncate text-xs text-muted">
@@ -331,7 +331,7 @@ function BranchTable({ branches }: { branches: Branch[] }) {
                 <td className={`td num text-right font-medium ${b.status === "DOWN" ? "text-down" : ""}`}>{latencyText(b)}</td>
                 <td className={`td num text-right ${(b.loss_pct ?? 0) > 0 ? "text-degraded" : ""}`}>{b.status === "PENDING" || b.status === "DISABLED" ? "—" : fmtLoss(b.loss_pct)}</td>
                 <td className="td num text-right">{fmtUptime(b.uptime_24h)}</td>
-                <td className="td"><Sparkline points={b.spark} /></td>
+                <td className="td"><Sparkline points={b.spark} warnMs={b.latency_warn_ms} /></td>
                 <td className="td text-xs text-muted">{incident ?? "—"}</td>
               </tr>
             );

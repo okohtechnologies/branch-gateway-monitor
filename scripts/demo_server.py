@@ -39,11 +39,26 @@ BRANCHES = [
 ]
 
 
+class DemoApi:
+    """Stands in for the Telegram Bot API so the Settings screen has a bot to show."""
+
+    def __init__(self, ok: bool):
+        self.ok = ok
+
+    async def call(self, method, payload, **kw):
+        if self.ok:
+            return True, {"username": "demo_branch_bot", "first_name": "Branch Monitor (demo)"}, None
+        return False, None, "network error: ConnectError"
+
+
 class NullNotifier:
     """Pretends to send. With --telegram-down it fails, to preview undelivered-alert handling."""
 
+    masked_chat = "\u2022\u2022\u2022\u2022\u20226148"
+
     def __init__(self, ok: bool = True):
         self.ok = ok
+        self.api = DemoApi(ok)
 
     async def send(self, text, buttons=None):
         return (True, None) if self.ok else (False, "demo: Telegram unreachable")
@@ -135,6 +150,8 @@ async def main(port: int, telegram_down: bool) -> None:
     settings = Settings(
         database_url=real.database_url, telegram_bot_token="demo", telegram_chat_id="0",
         secret_key=secret, _env_file=None,
+        # the demo's own fast defaults (otherwise the settings system would reset them to production values)
+        probe_interval_s=3, probe_count=1, probe_timeout_s=1.0, confirm=3, reminder_minutes=0, retention_days=0,
     )
     admin = await Database.connect(real.database_url)
     await admin.pool.execute(f'DROP SCHEMA IF EXISTS "{SCHEMA}" CASCADE')

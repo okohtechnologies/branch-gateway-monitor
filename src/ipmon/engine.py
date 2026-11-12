@@ -121,6 +121,19 @@ class Engine:
         d = self._branches.get(branch_id)
         return d.confirmed if d else None
 
+    def set_confirm(self, confirm: int) -> None:
+        """Change how many consecutive results confirm a status change, for every branch, immediately."""
+        if confirm < 1:
+            raise ValueError("confirm must be >= 1")
+        self.confirm = confirm
+        self._canary.confirm = confirm
+        for deb in self._branches.values():
+            deb.confirm = confirm
+
+    def reset_canary(self) -> None:
+        """Forget the canary's history (its target changed or it was switched off)."""
+        self._canary = Debouncer(self.confirm)
+
     def restore(self, branch_id: int, status: Status) -> None:
         """Seed a branch's confirmed status after a restart (e.g. from an open incident)."""
         self._branches.setdefault(branch_id, Debouncer(self.confirm)).confirmed = status

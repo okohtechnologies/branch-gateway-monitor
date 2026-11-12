@@ -8,6 +8,7 @@ import { Login } from "./pages/Login";
 import { Overview } from "./pages/Overview";
 import { Branches } from "./pages/Branches";
 import { Incidents } from "./pages/Incidents";
+import { Settings } from "./pages/Settings";
 
 // Charts are the heaviest dependency: only load them when a branch page is opened.
 const BranchDetail = lazy(() => import("./pages/BranchDetail").then((m) => ({ default: m.BranchDetail })));
@@ -32,6 +33,7 @@ function Gate() {
             }
           />
           <Route path="incidents" element={<Incidents />} />
+          <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

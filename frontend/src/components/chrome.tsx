@@ -1,7 +1,7 @@
 /** Pieces shared by the desktop sidebar and the phone header/tab bar. */
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { Building2, CircleX, CloudOff, LayoutDashboard, Siren, TriangleAlert, WifiOff, type LucideIcon } from "lucide-react";
+import { Building2, CircleX, CloudOff, LayoutDashboard, Settings, Siren, TriangleAlert, WifiOff, type LucideIcon } from "lucide-react";
 import { useAuth } from "../auth";
 import { useFreshness, useLive } from "../live";
 import { Modal } from "./Modal";
@@ -10,6 +10,7 @@ export const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boo
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/branches", label: "Branches", icon: Building2, end: true },
   { to: "/incidents", label: "Incidents", icon: Siren },
+  { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 /** A branch's detail page is reached from the Overview, so the Overview item stays highlighted there. */

@@ -352,13 +352,49 @@ class Database:
     async def revoke_session(self, sid: str) -> None:
         await self.pool.execute("UPDATE sessions SET revoked = TRUE WHERE id = $1", sid)
 
-    async def revoke_user_sessions(self, email: str) -> int:
-        """Sign a user out everywhere. Returns how many live sessions were ended."""
+    async def revoke_user_sessions(self, email: str, except_sid: str | None = None) -> int:
+        """Sign a user out everywhere (optionally keeping one session). Returns how many were ended."""
         return await self.pool.fetchval(
-            "WITH r AS (UPDATE sessions SET revoked = TRUE WHERE email = $1 AND NOT revoked RETURNING 1) "
-            "SELECT count(*) FROM r",
-            email.lower(),
+            "WITH r AS (UPDATE sessions SET revoked = TRUE WHERE email = $1 AND NOT revoked "
+            "AND ($2::text IS NULL OR id <> $2) RETURNING 1) SELECT count(*) FROM r",
+            email.lower(), except_sid,
         )
+
+    async def set_password(self, email: str, password_hash: str) -> None:
+        await self.pool.execute("UPDATE users SET password_hash = $2 WHERE email = $1", email.lower(), password_hash)
+
+    # --- settings overrides -------------------------------------------------------------
+
+    async def settings_overrides(self) -> dict:
+        rows = await self.pool.fetch("SELECT key, value FROM app_settings")
+        return {r["key"]: json.loads(r["value"]) for r in rows}
+
+    async def set_setting(self, key: str, value) -> None:
+        await self.pool.execute(
+            "INSERT INTO app_settings (key, value) VALUES ($1, $2::jsonb) "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+            key, json.dumps(value),
+        )
+
+    async def delete_setting(self, key: str) -> None:
+        await self.pool.execute("DELETE FROM app_settings WHERE key = $1", key)
+
+    # --- delivery status (Telegram panel) ----------------------------------------------------
+
+    async def last_delivery(self) -> dict:
+        """When a notification last got through, and the most recent failure (if any)."""
+        delivered = await self.pool.fetchval(
+            "SELECT max(COALESCE(delivered_at, sent_at)) FROM notifications WHERE success AND NOT suppressed"
+        )
+        failure = await self.pool.fetchrow(
+            "SELECT error, sent_at FROM notifications WHERE NOT success AND NOT suppressed AND NOT gave_up "
+            "AND error IS NOT NULL ORDER BY id DESC LIMIT 1"
+        )
+        return {
+            "delivered_at": delivered,
+            "last_error": failure["error"] if failure else None,
+            "last_error_at": failure["sent_at"] if failure else None,
+        }
 
     async def prune_sessions(self) -> int:
         """Forget sessions that expired or were revoked more than a week ago."""

@@ -36,3 +36,7 @@ class Settings(BaseSettings):
     canary_host: str = "1.1.1.1"
     canary_port: int = 443
     canary_type: str = "tcp"
+    canary_enabled: bool = True
+    # Pre-filled in the 'Add branch' form.
+    default_latency_warn_ms: float = 200
+    default_loss_warn_pct: float = 20

@@ -1,4 +1,4 @@
-import type { Branch, BranchDetail, BranchesResponse, BranchInput, Incident, Point, Range } from "./types";
+import type { Branch, BranchDetail, BranchesResponse, BranchInput, Incident, MonitorStatus, Point, Range, SettingValue, SettingsData, TelegramStatus } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -84,4 +84,12 @@ export const api = {
   createBranch: (b: BranchInput) => request<Branch>("POST", "/api/branches", b),
   updateBranch: (id: number, b: BranchInput) => request<Branch>("PUT", `/api/branches/${id}`, b),
   deleteBranch: (id: number) => request<void>("DELETE", `/api/branches/${id}`),
+  settings: () => request<SettingsData>("GET", "/api/settings"),
+  /** A value of null resets that setting to its default. */
+  updateSettings: (values: Record<string, SettingValue | null>) => request<SettingsData>("PUT", "/api/settings", { values }),
+  status: () => request<MonitorStatus>("GET", "/api/status"),
+  telegram: () => request<TelegramStatus>("GET", "/api/telegram"),
+  telegramTest: () => request<{ ok: boolean; error: string | null }>("POST", "/api/telegram/test"),
+  changePassword: (current_password: string, new_password: string) =>
+    request<{ ok: boolean; signed_out_others: number }>("POST", "/api/account/password", { current_password, new_password }),
 };

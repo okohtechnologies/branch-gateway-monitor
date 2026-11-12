@@ -11,14 +11,14 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from . import auth
+from . import auth, runtime_settings
 from .bot import Bot
 from .config import Settings
 from .db import Database, DuplicateName
@@ -27,6 +27,7 @@ from .heartbeat import Heartbeat
 from .notifier import TelegramNotifier
 from .probe import Target
 from .runner import Monitor
+from .validation import validate_host
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,17 @@ _HOSTNAME = re.compile(
 class LoginIn(BaseModel):
     email: str = Field(min_length=3, max_length=254)
     password: str = Field(min_length=1, max_length=256)
+
+
+class SettingsIn(BaseModel):
+    """Changes to apply. A value of null resets that setting to its default."""
+
+    values: dict[str, Any]
+
+
+class PasswordIn(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=10, max_length=256)
 
 
 class BranchIn(BaseModel):
@@ -71,16 +83,7 @@ class BranchIn(BaseModel):
     @field_validator("host")
     @classmethod
     def _valid_host(cls, v: str) -> str:  # FR-4
-        try:
-            ipaddress.ip_address(v)
-            return v
-        except ValueError:
-            pass
-        if re.fullmatch(r"[\d.]+", v):  # looks like an IPv4 address but is not one
-            raise ValueError("invalid IP address")
-        if not _HOSTNAME.match(v):
-            raise ValueError("invalid IP address or hostname")
-        return v
+        return validate_host(v)
 
     @model_validator(mode="after")
     def _tcp_needs_port(self):
@@ -147,6 +150,11 @@ def create_app(
                 retention_days=cfg.retention_days or None,
             )
         app.state.monitor = monitor or owned["monitor"]
+        # Settings changed from the dashboard (stored in the database) win over the .env defaults.
+        app.state.heartbeat = None
+        app.state.monitor.apply_settings(
+            runtime_settings.effective(runtime_settings.defaults_from(cfg), await app.state.db.settings_overrides())
+        )
         tasks = []
         if run_monitor:
             tasks.append(asyncio.create_task(app.state.monitor.run_forever()))
@@ -157,6 +165,7 @@ def create_app(
                     interval=cfg.heartbeat_interval_s,
                 )
                 owned["heartbeat"] = hb
+                app.state.heartbeat = hb
                 tasks.append(asyncio.create_task(hb.run_forever()))
             if cfg.bot_enabled and "notifier" in owned:
                 bot = Bot(owned["notifier"].api, app.state.db, app.state.monitor, {int(cfg.telegram_chat_id)})
@@ -179,6 +188,7 @@ def create_app(
     # Tests construct the app without running lifespan, so state is also set eagerly.
     if db is not None and monitor is not None and settings is not None:
         app.state.settings, app.state.db, app.state.monitor = settings, db, monitor
+        app.state.heartbeat = None
 
     async def session_user(cookies, app: FastAPI) -> dict | None:
         """The signed-in user, but only if the cookie is genuine AND its server-side session is still active.
@@ -317,6 +327,129 @@ def create_app(
                              limit: int = 100, _: dict = Depends(current_user)):
         rows = await request.app.state.db.incidents(branch_id, open_only, max(1, min(limit, 500)))
         return {"incidents": [_incident_dict(r) for r in rows]}
+
+    # --- settings -----------------------------------------------------------------
+
+    async def settings_payload(app: FastAPI) -> dict:
+        defaults = runtime_settings.defaults_from(app.state.settings)
+        overrides = await app.state.db.settings_overrides()
+        values = runtime_settings.effective(defaults, overrides)
+        return {
+            "values": values,
+            "defaults": defaults,
+            "custom": sorted(k for k in values if values[k] != defaults[k]),
+            "limits": runtime_settings.limits(),
+            "warnings": runtime_settings.warnings(values),
+        }
+
+    @app.get("/api/settings")
+    async def get_settings(request: Request, _: dict = Depends(current_user)):
+        return await settings_payload(request.app)
+
+    @app.put("/api/settings")
+    async def put_settings(body: SettingsIn, request: Request, _: dict = Depends(current_user)):
+        problems, to_set, to_reset = [], {}, []
+        for key, raw in body.values.items():
+            if key not in runtime_settings.FIELDS:
+                problems.append({"loc": ["body", key], "msg": "is not a setting you can change"})
+            elif raw is None:
+                to_reset.append(key)
+            else:
+                try:
+                    to_set[key] = runtime_settings.check(key, raw)
+                except ValueError as exc:
+                    problems.append({"loc": ["body", key], "msg": str(exc)})
+        if problems:  # all or nothing: never apply half of an edit
+            raise HTTPException(422, detail=problems)
+        db_ = request.app.state.db
+        for key, value in to_set.items():
+            await db_.set_setting(key, value)
+        for key in to_reset:
+            await db_.delete_setting(key)
+        payload = await settings_payload(request.app)
+        request.app.state.monitor.apply_settings(payload["values"])  # live, no restart
+        return payload
+
+    # --- monitor health (read-only panel) ---------------------------------------------
+
+    @app.get("/api/status")
+    async def monitor_status(request: Request, _: dict = Depends(current_user)):
+        mon: Monitor = request.app.state.monitor
+        ok, health = await check_health(request.app.state.db, mon, started_at)
+        hb = getattr(request.app.state, "heartbeat", None)
+        return {
+            "ok": ok,
+            "database": health["db"],
+            "probe_loop": health["probe_loop"],
+            "interval_s": mon.interval,
+            "alerts_pending": health["alerts_pending"],
+            "uptime_s": round(time.monotonic() - started_at),
+            "heartbeat": {
+                "configured": hb is not None,
+                "failing": bool(hb and hb.failing),
+                "last_ok_age_s": round(time.time() - hb.last_delivered_at, 1) if hb and hb.last_delivered_at else None,
+            },
+        }
+
+    # --- telegram ------------------------------------------------------------------------
+
+    test_state = {"at": 0.0}
+
+    @app.get("/api/telegram")
+    async def telegram_status(request: Request, _: dict = Depends(current_user)):
+        mon: Monitor = request.app.state.monitor
+        notifier = mon.notifier
+        client = getattr(notifier, "api", None)
+        out: dict = {
+            "configured": client is not None,
+            "bot": None,
+            "bot_error": None,
+            "chat": getattr(notifier, "masked_chat", None),
+            "pending": mon.alerts_pending,
+        }
+        if client is not None:
+            ok, result, err = await client.call("getMe", {}, retries=0, timeout=8)
+            if ok and result:
+                out["bot"] = {"username": result.get("username"), "name": result.get("first_name")}
+            else:
+                out["bot_error"] = err
+        out.update(await request.app.state.db.last_delivery())
+        return out
+
+    @app.post("/api/telegram/test")
+    async def telegram_test(request: Request, _: dict = Depends(current_user)):
+        now = time.monotonic()
+        if now - test_state["at"] < 5:
+            raise HTTPException(429, "Wait a few seconds before sending another test.", headers={"Retry-After": "5"})
+        test_state["at"] = now
+        ok, err = await request.app.state.monitor.notifier.send(
+            "\u2705 Test message from Branch Monitor. If you can read this, alerts will reach you."
+        )
+        await request.app.state.db.record_notification(None, "TEST", "telegram", ok, err)
+        return {"ok": ok, "error": err}
+
+    # --- account ---------------------------------------------------------------------------
+
+    @app.post("/api/account/password")
+    async def change_password(body: PasswordIn, request: Request, user: dict = Depends(current_user)):
+        key = f"pw:{request.client.host if request.client else 'unknown'}"
+        if throttle.blocked(key):
+            wait = throttle.retry_after(key)
+            raise HTTPException(
+                429, f"Too many failed attempts. Try again in {max(1, round(wait / 60))} minute(s).",
+                headers={"Retry-After": str(wait)},
+            )
+        row = await request.app.state.db.get_user(user["sub"])
+        # 400, not 401: a 401 would make the dashboard think the session expired and sign the user out.
+        if not row or not auth.verify_password(row["password_hash"], body.current_password):
+            throttle.record_failure(key)
+            raise HTTPException(400, "The current password is not correct.")
+        throttle.reset(key)
+        if body.new_password == body.current_password:
+            raise HTTPException(422, detail=[{"loc": ["body", "new_password"], "msg": "must be different from the current password"}])
+        await request.app.state.db.set_password(row["email"], auth.hash_password(body.new_password))
+        ended = await request.app.state.db.revoke_user_sessions(row["email"], except_sid=user["jti"])  # keep this device
+        return {"ok": True, "signed_out_others": ended}
 
     # --- health (unauthenticated: no secrets, used by external checks) -------
 

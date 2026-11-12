@@ -81,6 +81,12 @@ class TelegramNotifier:
         self.api = TelegramApi(token, client, retries, base_delay)
         self._chat_id = chat_id
 
+    @property
+    def masked_chat(self) -> str:
+        """The chat id with all but the last four characters hidden, safe to show on screen."""
+        cid = str(self._chat_id)
+        return "\u2022" * max(0, len(cid) - 4) + cid[-4:]
+
     async def aclose(self) -> None:
         await self.api.aclose()
 

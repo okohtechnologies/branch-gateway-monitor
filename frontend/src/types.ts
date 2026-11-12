@@ -79,3 +79,43 @@ export interface BranchInput {
   loss_warn_pct: number;
   enabled: boolean;
 }
+
+// ---- settings screen ----
+
+export type SettingValue = number | string | boolean;
+
+export interface SettingLimit {
+  kind: "int" | "float" | "bool" | "host" | "choice";
+  min?: number;
+  max?: number;
+  choices?: string[];
+}
+
+export interface SettingsData {
+  values: Record<string, SettingValue>;
+  defaults: Record<string, SettingValue>;
+  custom: string[];
+  limits: Record<string, SettingLimit>;
+  warnings: string[];
+}
+
+export interface MonitorStatus {
+  ok: boolean;
+  database: boolean;
+  probe_loop: { ok: boolean; cycles: number; last_cycle_age_s: number | null };
+  interval_s: number;
+  alerts_pending: number;
+  uptime_s: number;
+  heartbeat: { configured: boolean; failing: boolean; last_ok_age_s: number | null };
+}
+
+export interface TelegramStatus {
+  configured: boolean;
+  bot: { username: string | null; name: string | null } | null;
+  bot_error: string | null;
+  chat: string | null;
+  pending: number;
+  delivered_at: string | null;
+  last_error: string | null;
+  last_error_at: string | null;
+}

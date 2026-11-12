@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -43,6 +44,11 @@ class Heartbeat:
         self.interval = interval
         self._client = client or httpx.AsyncClient(timeout=10)
         self._failing = False  # log state changes, not every minute
+        self.last_delivered_at: float | None = None  # unix time of the last ping that got through
+
+    @property
+    def failing(self) -> bool:
+        return self._failing
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -68,6 +74,8 @@ class Heartbeat:
         elif not delivered and not self._failing:
             log.warning("heartbeat delivery to %s failed: %s", self._host, problem)
         self._failing = not delivered
+        if delivered:
+            self.last_delivered_at = time.time()
         return delivered
 
     async def run_forever(self) -> None:

@@ -84,3 +84,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     user_agent TEXT
 );
 CREATE INDEX IF NOT EXISTS sessions_email_active ON sessions (email) WHERE NOT revoked;
+
+-- Settings changed from the dashboard. The environment supplies the defaults; a row here overrides one.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key        TEXT PRIMARY KEY,
+    value      JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

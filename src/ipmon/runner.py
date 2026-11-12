@@ -60,6 +60,27 @@ class Monitor:
         self.alerts_pending = 0  # undelivered alerts waiting to be re-sent
         self.cycles = 0
         self._subscribers: set[asyncio.Queue] = set()
+        self._wake = asyncio.Event()  # set when settings change, so a new interval applies at once
+
+    # --- settings changed while running ---------------------------------------------
+
+    def apply_settings(self, values: dict) -> None:
+        """Make new values (see runtime_settings) take effect immediately, without a restart."""
+        self.interval = float(values["probe_interval_s"])
+        self.probe_count = int(values["probe_count"])
+        self.probe_timeout = float(values["probe_timeout_s"])
+        self.reminder_minutes = int(values["reminder_minutes"]) or None
+        self.retention_days = int(values["retention_days"]) or None
+        self.engine.set_confirm(int(values["confirm"]))
+        canary = (
+            Target(None, values["canary_host"], values["canary_type"], int(values["canary_port"]))
+            if values["canary_enabled"]
+            else None
+        )
+        if canary != self.canary:
+            self.canary = canary
+            self.engine.reset_canary()  # a stale canary verdict must not keep suppressing alerts
+        self._wake.set()
 
     # --- live feed (WebSocket) ----------------------------------------------
 
@@ -117,7 +138,12 @@ class Monitor:
                 raise
             except Exception:
                 log.exception("probe cycle failed; continuing")
-            await asyncio.sleep(max(0.0, self.interval - (time.monotonic() - started)))
+            delay = max(0.0, self.interval - (time.monotonic() - started))
+            try:
+                await asyncio.wait_for(self._wake.wait(), delay)  # new settings cut the wait short
+            except asyncio.TimeoutError:
+                pass
+            self._wake.clear()
 
     # --- one cycle ------------------------------------------------------------
 

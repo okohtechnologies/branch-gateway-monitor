@@ -114,6 +114,14 @@ or tickets. To rotate the bot token, revoke it with `@BotFather`, update `.env`,
   ```
   (On Windows PowerShell, use Git Bash for the `gunzip` line, or unzip the file first and pipe it
   with `Get-Content`.)
+- **Settings screen.** Most tuning is done in the dashboard under **Settings**, with no restart:
+  check interval, pings per check and timeout, how many matching checks confirm an outage, the internet
+  canary, reminder interval, how long history is kept, and the thresholds pre-filled for new branches.
+  The values in `.env` are only the **defaults**; a value you change in the dashboard is stored in the
+  database and wins until you press "Reset to default". Secrets (bot token, chat ID, heartbeat URL,
+  database password, `SECRET_KEY`) can never be changed from the dashboard and stay in `.env`. The
+  screen also shows Telegram status (with a "Send test message" button), a read-only monitor-health
+  panel, and a form to change your password (which signs out your other devices).
 - **Undelivered alerts are retried.** If Telegram cannot be reached, a DOWN, DEGRADED, RECOVERED or
   monitor-offline alert is saved and re-sent automatically (after 1, 2, 4 ... up to 15 minutes), marked
   "DELAYED ALERT" with its original time, in the original order. Acknowledge and Mute buttons are only

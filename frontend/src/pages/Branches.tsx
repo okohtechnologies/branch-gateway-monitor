@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Building2, Pencil, Plus, Trash2 } from "lucide-react";
 import { api, ApiError } from "../api";
@@ -6,6 +6,7 @@ import { fmtMs } from "../format";
 import { useLive } from "../live";
 import { parseFieldErrors, validateBranchInput } from "../logic";
 import { useToast } from "../toast";
+import { Field } from "../components/Field";
 import { Modal } from "../components/Modal";
 import { EmptyState, ErrorState } from "../components/States";
 import { StatusPill } from "../components/StatusPill";
@@ -43,6 +44,8 @@ export function Branches() {
   const [editing, setEditing] = useState<Branch | "new" | null>(null);
   const [deleting, setDeleting] = useState<Branch | null>(null);
   const [highlight, setHighlight] = useState<number | null>(null);
+  // Pre-filled thresholds for a new branch come from Settings (falling back to the built-in 200 ms / 20%).
+  const [defaults, setDefaults] = useState({ latency: EMPTY.latency_warn_ms, loss: EMPTY.loss_warn_pct });
   const [params, setParams] = useSearchParams();
 
   const load = useCallback(() => {
@@ -55,6 +58,12 @@ export function Branches() {
       .catch((e: Error) => setError(e.message));
   }, []);
   useEffect(load, [load, transitionTick]);
+  useEffect(() => {
+    api
+      .settings()
+      .then((d) => setDefaults({ latency: Number(d.values.default_latency_warn_ms), loss: Number(d.values.default_loss_warn_pct) }))
+      .catch(() => undefined); // not critical: the built-in defaults are fine
+  }, []);
 
   // Deep links from other pages: /branches?new=1 and /branches?edit=<id>.
   useEffect(() => {
@@ -215,6 +224,7 @@ export function Branches() {
       {editing && (
         <BranchForm
           branch={editing === "new" ? null : editing}
+          defaults={defaults}
           onClose={closeEditor}
           onSaved={(saved, created) => {
             closeEditor();
@@ -260,30 +270,8 @@ export function Branches() {
   );
 }
 
-function Field({ label, hint, error, optional, children }: { label: string; hint?: string; error?: string; optional?: boolean; children: (p: { id: string; "aria-invalid": boolean; "aria-describedby": string | undefined }) => ReactNode }) {
-  const id = useId();
-  const descId = `${id}-d`;
-  return (
-    <div>
-      <label htmlFor={id} className="label">
-        {label} {optional && <span className="font-normal text-muted">(optional)</span>}
-      </label>
-      {children({ id, "aria-invalid": Boolean(error), "aria-describedby": error || hint ? descId : undefined })}
-      {error ? (
-        <p id={descId} className="field-error">
-          {error}
-        </p>
-      ) : hint ? (
-        <p id={descId} className="hint">
-          {hint}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
-function BranchForm({ branch, onClose, onSaved }: { branch: Branch | null; onClose: () => void; onSaved: (saved: Branch, created: boolean) => void }) {
-  const [f, setF] = useState<BranchInput>(branch ? toInput(branch) : EMPTY);
+function BranchForm({ branch, defaults, onClose, onSaved }: { branch: Branch | null; defaults: { latency: number; loss: number }; onClose: () => void; onSaved: (saved: Branch, created: boolean) => void }) {
+  const [f, setF] = useState<BranchInput>(branch ? toInput(branch) : { ...EMPTY, latency_warn_ms: defaults.latency, loss_warn_pct: defaults.loss });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

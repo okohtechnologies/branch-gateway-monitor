@@ -1,3 +1,5 @@
+import pytest
+
 from ipmon.engine import (
     BranchConfig,
     Debouncer,
@@ -266,3 +268,32 @@ def test_degraded_after_suppressed_down_reports_original_old_status():
     events = cycle(e, [A, B], [SLOW, GOOD], canary=GOOD)
     assert MonitorSuspectEnded() in events
     assert Transition(1, Status.UP, Status.DEGRADED, SLOW) in events
+
+
+# --- settings changed while running -------------------------------------------------------------
+
+
+def test_set_confirm_changes_how_fast_an_outage_is_confirmed():
+    e = Engine(confirm=3)
+    warm_up(e, [A])
+    e.set_confirm(2)
+    assert cycle(e, [A], [DEAD]) == []
+    assert cycle(e, [A], [DEAD]) == [Transition(1, Status.UP, Status.DOWN, DEAD)]  # two results now suffice
+
+
+def test_set_confirm_rejects_nonsense():
+    with pytest.raises(ValueError):
+        Engine(confirm=3).set_confirm(0)
+
+
+def test_reset_canary_stops_a_stale_canary_verdict_suppressing_alerts():
+    e = Engine(confirm=3)
+    warm_up(e, [A, B])
+    for _ in range(3):
+        cycle(e, [A, B], [DEAD, DEAD], canary=DEAD)
+    assert e.monitor_suspect  # the canary is confirmed down and everything fails
+    e.reset_canary()  # the canary was switched off or retargeted
+    # one more cycle without a canary: nothing may keep the monitor in the suspect state
+    events = cycle(e, [A, B], [DEAD, DEAD], canary=None)
+    assert not e.monitor_suspect
+    assert MonitorSuspectEnded() in events
