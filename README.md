@@ -116,11 +116,39 @@ Data is kept in the `pgdata` Docker volume. `docker compose down` keeps it;
 | --- | --- |
 | Every branch shows DOWN | Host not on the VPN/network, or ICMP blocked. Try a TCP probe (branch type "TCP connect" and an open port). |
 | Canary alone fails, branches fine | ICMP to the internet is often blocked; keep the canary on TCP (default). |
+| App container fails with `Name or service not known` | `POSTGRES_PASSWORD` contains URL characters such as `@ / : # %`. Use letters and digits only (see `.env.example`). If the database volume already exists with the old password, recreate it: `docker compose down -v` (this deletes the database). |
 | ICMP fails only in Docker | The container needs `NET_RAW` and the `ping_group_range` sysctl (both set in `docker-compose.yml`). |
 | No Telegram messages | Check `docker compose logs app` for `telegram` errors; confirm the token and chat ID, and that you messaged the bot first. |
 | Bot silent, log shows a conflict | Two copies of the app are polling the same bot. Run only one. |
 | Login says too many attempts | 5 failures lock a client out for 5 minutes. Restart the app to clear it. |
 | App refuses to start, mentions `HEARTBEAT_URL` | The URL is malformed; it must be a full `https://...` URL. |
+
+## Run it day to day on Windows (without Docker)
+
+Prerequisites, once: the PostgreSQL service is running, `.env` is filled in (see `.env.example`),
+the virtual environment exists, and `npm run build` has been run in `frontend` (the server shows
+the dashboard from `frontend/dist`).
+
+**Start the server** (monitoring, Telegram bot, heartbeat and dashboard all run in this one process):
+
+```powershell
+& "c:\dev\IP monitor\.venv\Scripts\python.exe" -m ipmon
+```
+
+Wait for `Application startup complete`, then open <http://127.0.0.1:8000> and sign in.
+It works from any folder. Keep the window open: closing it, or putting the PC to sleep, stops
+monitoring. Stop it with **Ctrl+C**.
+
+Rules of thumb:
+
+- Run **one** copy only. A second copy fights the first over the Telegram bot.
+- The PC running it must be on the network or VPN that can reach the branch gateways. With the
+  VPN off, branches show DOWN.
+- After changing `.env` or any code, stop the server (Ctrl+C) and start it again.
+- After changing the frontend, run `npm run build` in `frontend`, then reload the browser.
+- Check it is healthy: `curl http://127.0.0.1:8000/health` should answer `"status":"ok"`.
+
+For 24/7 monitoring, run it on an always-on machine with Docker (see Quick start above).
 
 ## Development
 
