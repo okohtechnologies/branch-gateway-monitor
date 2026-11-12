@@ -273,3 +273,61 @@ async def test_mute_replaces_previous_and_expires(setup):
     await db.pool.execute("UPDATE mutes SET until = now() - interval '1 second'")
     assert await db.muted_until(a) is None
     assert await db.unmute_branch(a) is False
+
+
+# --- retention ---------------------------------------------------------------------------
+
+
+async def seed_checks(db, branch_id, ages_days):
+    from datetime import datetime, timedelta, timezone
+
+    from ipmon.engine import Status
+
+    now = datetime.now(timezone.utc)
+    for d in ages_days:
+        await db.insert_check(branch_id, GOOD, Status.UP, now - timedelta(days=d))
+        await db.insert_check(None, GOOD, Status.UP, now - timedelta(days=d))  # canary row
+
+
+async def test_prune_deletes_only_expired_checks(setup):
+    m, n, script, db, a = setup
+    await seed_checks(db, a, [1, 10, 29, 31, 45, 90])
+    removed = await db.prune_checks(30)
+    assert removed == 6  # 3 expired ages x (branch row + canary row)
+    ages = await db.pool.fetchval("select count(*) from checks")
+    assert ages == 6
+
+
+async def test_prune_handles_backlog_larger_than_one_batch(setup):
+    m, n, script, db, a = setup
+    await seed_checks(db, a, [60] * 25)
+    assert await db.prune_checks(30, batch=10) == 50
+    assert await db.pool.fetchval("select count(*) from checks") == 0
+
+
+async def test_prune_keeps_incidents_and_notifications(setup):
+    m, n, script, db, a = setup
+    await go_down(m, script, a)
+    await db.pool.execute("UPDATE checks SET ts = now() - interval '90 days'")
+    await db.prune_checks(30)
+    assert await db.pool.fetchval("select count(*) from checks") == 0
+    assert await db.pool.fetchval("select count(*) from incidents") == 1
+    assert await db.pool.fetchval("select count(*) from notifications") == 1
+
+
+async def test_monitor_prunes_at_start_then_waits(setup):
+    m, n, script, db, a = setup
+    await seed_checks(db, a, [60])
+    assert await m.maybe_prune() == 2
+    await seed_checks(db, a, [60])
+    assert await m.maybe_prune() == 0  # too soon: not run again for a few hours
+    m._last_prune -= m.PRUNE_EVERY_S + 1
+    assert await m.maybe_prune() == 2
+
+
+async def test_retention_zero_keeps_everything(db):
+    m = Monitor(db, FakeNotifier(), probe_fn=Script(), retention_days=None)
+    a = await db.upsert_branch("HQ", "10.0.0.1")
+    await seed_checks(db, a, [400])
+    assert await m.maybe_prune() == 0
+    assert await db.pool.fetchval("select count(*) from checks") == 2

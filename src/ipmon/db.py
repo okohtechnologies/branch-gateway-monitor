@@ -136,6 +136,29 @@ class Database:
             incident_id, kind, channel, success, error, suppressed,
         )
 
+    # --- retention ---------------------------------------------------------------------
+
+    async def prune_checks(self, days: int, batch: int = 10_000) -> int:
+        """Delete raw checks (canary included) older than ``days``. Returns rows removed.
+
+        Deletes in batches so a large backlog never holds a long lock on the table.
+        Incidents and notifications are kept: they are small and are the audit trail.
+        """
+        total = 0
+        while True:
+            n = await self.pool.fetchval(
+                """
+                WITH doomed AS (
+                    SELECT id FROM checks WHERE ts < now() - make_interval(days => $1) LIMIT $2
+                ), d AS (DELETE FROM checks WHERE id IN (SELECT id FROM doomed) RETURNING 1)
+                SELECT count(*) FROM d
+                """,
+                days, batch,
+            )
+            total += n
+            if n < batch:
+                return total
+
     # --- acknowledgement (FR-17) -------------------------------------------------
 
     async def acknowledge_incident(self, incident_id: int, who: str) -> str:

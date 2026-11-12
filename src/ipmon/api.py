@@ -140,6 +140,7 @@ def create_app(
                 app.state.db, notifier, interval=cfg.probe_interval_s, confirm=cfg.confirm,
                 canary=canary, probe_count=cfg.probe_count, probe_timeout=cfg.probe_timeout_s,
                 reminder_minutes=cfg.reminder_minutes or None,
+                retention_days=cfg.retention_days or None,
             )
         app.state.monitor = monitor or owned["monitor"]
         tasks = []

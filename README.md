@@ -100,10 +100,25 @@ or tickets. To rotate the bot token, revoke it with `@BotFather`, update `.env`,
 
 - **Logs:** `docker compose logs -f app`
 - **Update:** `git pull && docker compose up -d --build`
-- **Backup the database:**
-  `docker compose exec db pg_dump -U ipmon ipmon > backup.sql`
-- **Restore:**
-  `docker compose exec -T db psql -U ipmon ipmon < backup.sql`
+- **Backups are automatic.** The `backup` service writes a compressed dump to `./backups/` every
+  24 hours (first one at start-up) and keeps the last 14 days (`BACKUP_KEEP_DAYS`). Check it with
+  `docker compose logs backup`. Dumps contain your data and password hashes: keep the folder private
+  and copy it off this machine now and then, because a backup on the same disk does not survive
+  that disk failing.
+- **Restore a backup** (this replaces the current database):
+  ```
+  docker compose stop app backup
+  docker compose exec db psql -U ipmon -d postgres -c "drop database ipmon" -c "create database ipmon owner ipmon"
+  gunzip -c backups/ipmon-2026-11-12_0809.sql.gz | docker compose exec -T db psql -U ipmon -d ipmon
+  docker compose up -d
+  ```
+  (On Windows PowerShell, use Git Bash for the `gunzip` line, or unzip the file first and pipe it
+  with `Get-Content`.)
+- **History is pruned.** Raw checks older than `RETENTION_DAYS` (default 30) are deleted at start-up
+  and every 6 hours. Incidents and the notification log are kept. Set `RETENTION_DAYS=0` to keep
+  everything.
+- **Time zone.** Alert and `/mute` times use the `TZ` setting (an IANA name such as `Africa/Lagos`,
+  default `UTC`). Set it in `.env` and run `docker compose up -d`.
 - **Health:** `curl http://127.0.0.1:8000/health` returns 200 when healthy, 503 otherwise.
 - **Reset a dashboard password:** run the `create_admin.py` command again with the same email.
 
@@ -151,6 +166,9 @@ Rules of thumb:
 For 24/7 monitoring, run it on an always-on machine with Docker (see Quick start above).
 
 ## Development
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the backend tests against PostgreSQL, the frontend
+tests and build, and a Docker image build on every push and pull request.
 
 Requires Python 3.12+, Node 22+ and a local PostgreSQL.
 

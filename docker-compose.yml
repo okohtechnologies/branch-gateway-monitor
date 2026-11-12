@@ -25,6 +25,8 @@ services:
     environment:
       # Overrides any DATABASE_URL in .env (that one is for running outside Docker).
       DATABASE_URL: postgresql://ipmon:${POSTGRES_PASSWORD}@db:5432/ipmon
+      # Time zone for alert and /mute times (IANA name). Defaults to UTC.
+      TZ: ${TZ:-UTC}
     ports:
       # Bound to this machine only. To reach it from the company network, change
       # 127.0.0.1 to the host's LAN address (never expose it to the public internet).
@@ -34,6 +36,38 @@ services:
       net.ipv4.ping_group_range: "0 2147483647"
     cap_add:
       - NET_RAW
+
+  # Daily compressed dump of the database into ./backups (kept BACKUP_KEEP_DAYS days).
+  # A dump contains your data and password hashes: keep that folder private.
+  backup:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: ipmon
+      PGDATABASE: ipmon
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    volumes:
+      - ./backups:/backups
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          f="/backups/ipmon-$$(date +%Y-%m-%d_%H%M).sql"
+          if pg_dump -f "$$f" && gzip -f "$$f"; then
+            echo "backup ok: $$f.gz"
+          else
+            echo "backup FAILED" >&2
+            rm -f "$$f" "$$f.gz"
+          fi
+          find /backups -name 'ipmon-*.sql.gz' -mtime +"$$KEEP_DAYS" -delete
+          sleep 86400
+        done
 
 volumes:
   pgdata:

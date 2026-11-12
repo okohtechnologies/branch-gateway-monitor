@@ -16,6 +16,11 @@ ENV PYTHONUNBUFFERED=1 \
     PORT=8000 \
     IPMON_FRONTEND_DIST=/app/frontend-dist
 
+# tzdata lets the TZ setting (e.g. TZ=Africa/Lagos) work in the slim image.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tzdata \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY pyproject.toml ./
 COPY src ./src

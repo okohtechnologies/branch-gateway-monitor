@@ -40,6 +40,7 @@ class Monitor:
         probe_timeout: float = 2.0,
         probe_fn=probe_all,
         reminder_minutes: int | None = 30,
+        retention_days: int | None = 30,
     ):
         self.db = db
         self.notifier = notifier
@@ -49,6 +50,8 @@ class Monitor:
         self.probe_timeout = probe_timeout
         self._probe_fn = probe_fn
         self.reminder_minutes = reminder_minutes
+        self.retention_days = retention_days
+        self._last_prune: float | None = None
         self.engine = Engine(confirm)
         self.latest: dict[int, dict] = {}  # branch_id -> last probe snapshot
         self.last_cycle_at: datetime | None = None
@@ -84,11 +87,27 @@ class Monitor:
         for r in rows:
             self.engine.restore(r["branch_id"], Status(r["severity"]))
 
+    PRUNE_EVERY_S = 6 * 3600
+
+    async def maybe_prune(self) -> int:
+        """Delete expired raw checks at start-up and then every few hours."""
+        if not self.retention_days:
+            return 0
+        now = time.monotonic()
+        if self._last_prune is not None and now - self._last_prune < self.PRUNE_EVERY_S:
+            return 0
+        self._last_prune = now
+        removed = await self.db.prune_checks(self.retention_days)
+        if removed:
+            log.info("pruned %d checks older than %d days", removed, self.retention_days)
+        return removed
+
     async def run_forever(self) -> None:
         await self.restore_state()
         while True:
             started = time.monotonic()
             try:
+                await self.maybe_prune()
                 await self.run_cycle()
             except asyncio.CancelledError:
                 raise

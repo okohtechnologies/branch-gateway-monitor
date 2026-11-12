@@ -89,7 +89,7 @@ def test_format_down():
     text = format_transition("HQ", "10.0.0.1", Status.UP, Status.DOWN, ProbeResult(None, 100.0), WHEN)
     assert text.startswith("🔴 DOWN: HQ")
     assert "IP: 10.0.0.1" in text and "no reply" in text and "Loss: 100%" in text
-    assert "2026-01-02 03:04:05 UTC" in text
+    assert WHEN.astimezone().strftime("%Y-%m-%d %H:%M:%S") in text
 
 
 def test_format_degraded_and_recovered():

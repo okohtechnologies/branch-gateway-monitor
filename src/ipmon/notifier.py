@@ -107,7 +107,8 @@ def alert_buttons(incident_id: int, branch_id: int) -> Buttons:
 
 
 def _stamp(when: datetime) -> str:
-    return when.strftime("%Y-%m-%d %H:%M:%S %Z").strip()
+    """Time in the host's zone (set TZ in the container), with its abbreviation."""
+    return when.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z").strip()
 
 
 def humanize(seconds: float) -> str:
