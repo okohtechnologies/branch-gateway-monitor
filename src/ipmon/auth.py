@@ -62,5 +62,14 @@ class LoginThrottle:
         self._recent(key)
         self._failures.setdefault(key, []).append(time.monotonic())
 
+    def retry_after(self, key: str) -> int:
+        """Seconds until a blocked client may try again (0 if not blocked)."""
+        recent = self._recent(key)
+        if len(recent) < self.limit:
+            return 0
+        # Unblocked once enough old failures age out to drop below the limit.
+        expires = recent[len(recent) - self.limit] + self.window
+        return max(1, int(expires - time.monotonic()) + 1)
+
     def reset(self, key: str) -> None:
         self._failures.pop(key, None)

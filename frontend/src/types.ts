@@ -1,5 +1,11 @@
 export type Status = "UP" | "DEGRADED" | "DOWN" | "PENDING" | "DISABLED";
 
+/** One bucket of the last hour: average latency (null = no reply) and whether any check was DOWN. */
+export interface SparkPoint {
+  v: number | null;
+  d: boolean;
+}
+
 export interface Branch {
   id: number;
   name: string;
@@ -18,6 +24,13 @@ export interface Branch {
   incident_id?: number | null;
   incident_started_at?: string | null;
   acknowledged_by?: string | null;
+  spark?: SparkPoint[];
+}
+
+export interface BranchesResponse {
+  branches: Branch[];
+  monitor_suspect: boolean;
+  interval_s: number;
 }
 
 export interface Incident {

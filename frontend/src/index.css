@@ -2,51 +2,72 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Light theme tokens; .dark overrides them. Status colours always pair with a text label. */
+/*
+ * Design tokens. Every text/background pair below was checked against WCAG AA
+ * (4.5:1 text, 3:1 control borders) in both themes. Green is reserved for "up":
+ * interactive elements use the blue accent so a button is never mistaken for a status.
+ */
 :root {
-  --bg: #f4f5f7;
-  --surface: #ffffff;
-  --surface-2: #eef0f3;
-  --border: #dde1e7;
-  --text: #14181f;
-  --muted: #566070;
-  --accent: #2459d6;
-  --up: #15803d;
-  --degraded: #a15c07;
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --card2: #eef2f7;
+  --line: #dde3ec;
+  --line-strong: #7c8ba1;
+  --text: #0f172a;
+  --muted: #475569;
+  --accent: #1d4ed8;
+  --primary: #1d4ed8;
+  --on-primary: #ffffff;
+  --danger-solid: #b91c1c;
+  --up: #13722f;
+  --degraded: #8a5208;
   --down: #b91c1c;
-  --pending: #566070;
+  --pending: #475569;
+  --shadow: 0 1px 2px rgb(15 23 42 / 0.06);
   color-scheme: light;
 }
 
 .dark {
-  --bg: #0d1117;
-  --surface: #151b23;
-  --surface-2: #1c242e;
-  --border: #2a3340;
-  --text: #e6eaf0;
-  --muted: #93a0b1;
-  --accent: #6aa5ff;
-  --up: #3fb950;
-  --degraded: #e3a008;
-  --down: #f85149;
-  --pending: #93a0b1;
+  --bg: #0f172a;
+  --card: #1b2336;
+  --card2: #252e43;
+  --line: #2a3550;
+  --line-strong: #64748b;
+  --text: #f8fafc;
+  --muted: #9aa8bc;
+  --accent: #7db3ff;
+  --primary: #2563eb;
+  --on-primary: #ffffff;
+  --danger-solid: #b91c1c;
+  --up: #34d399;
+  --degraded: #fbbf24;
+  --down: #fa8585;
+  --pending: #9aa8bc;
+  --shadow: none;
   color-scheme: dark;
 }
 
 @theme inline {
-  --color-bg: var(--bg);
-  --color-surface: var(--surface);
-  --color-surface-2: var(--surface-2);
-  --color-line: var(--border);
+  --color-app: var(--bg);
+  --color-card: var(--card);
+  --color-card2: var(--card2);
+  --color-line: var(--line);
+  --color-strong: var(--line-strong);
   --color-ink: var(--text);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-primary: var(--primary);
+  --color-onprimary: var(--on-primary);
   --color-up: var(--up);
   --color-degraded: var(--degraded);
   --color-down: var(--down);
   --color-pending: var(--pending);
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  --font-sans: "Fira Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Fira Code", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+}
+
+html {
+  font-size: 16px;
 }
 
 html,
@@ -59,7 +80,20 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Numbers align in columns and never jitter as live values change. IPs read as code. */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+.mono {
+  font-family: var(--font-mono);
+  font-variant-ligatures: none;
+  letter-spacing: -0.01em;
 }
 
 :focus-visible {
@@ -67,9 +101,94 @@ body {
   outline-offset: 2px;
 }
 
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-card;
+    box-shadow: var(--shadow);
+  }
+  .btn {
+    @apply inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors duration-150 select-none disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10;
+  }
+  .btn-primary {
+    @apply bg-primary text-onprimary hover:brightness-110;
+  }
+  .btn-secondary {
+    @apply border border-strong bg-card text-ink hover:bg-card2;
+  }
+  .btn-ghost {
+    @apply text-muted hover:bg-card2 hover:text-ink;
+  }
+  .btn-danger {
+    @apply text-white hover:brightness-110;
+    background: var(--danger-solid);
+  }
+  .icon-btn {
+    @apply inline-flex size-11 cursor-pointer items-center justify-center rounded-lg text-muted transition-colors duration-150 hover:bg-card2 hover:text-ink md:size-10;
+  }
+  .input {
+    @apply min-h-11 w-full rounded-lg border border-strong bg-app px-3 text-ink transition-colors duration-150 placeholder:text-muted md:min-h-10;
+  }
+  .input[aria-invalid="true"] {
+    border-color: var(--down);
+  }
+  .label {
+    @apply mb-1 block text-sm font-medium text-ink;
+  }
+  .hint {
+    @apply mt-1 text-xs text-muted;
+  }
+  .field-error {
+    @apply mt-1 text-xs font-medium text-down;
+  }
+  .chip {
+    @apply inline-flex min-h-11 cursor-pointer items-center gap-1.5 rounded-full md:min-h-9 border border-line px-3 text-sm text-muted transition-colors duration-150 hover:text-ink;
+  }
+  .chip[aria-pressed="true"] {
+    @apply border-strong bg-card2 text-ink;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-xs font-semibold tracking-wide text-muted uppercase;
+  }
+  .td {
+    @apply px-3 py-2.5 align-middle;
+  }
+  .skeleton {
+    @apply animate-pulse rounded-md bg-card2;
+  }
+  /* Status tints: a quiet wash of the status colour, never colour alone. */
+  .tone-down {
+    border-color: color-mix(in srgb, var(--down) 55%, var(--line));
+    background: color-mix(in srgb, var(--down) 7%, var(--card));
+  }
+  .tone-degraded {
+    border-color: color-mix(in srgb, var(--degraded) 55%, var(--line));
+    background: color-mix(in srgb, var(--degraded) 7%, var(--card));
+  }
+  .banner-down {
+    border-color: color-mix(in srgb, var(--down) 50%, var(--line));
+    background: color-mix(in srgb, var(--down) 12%, var(--card));
+  }
+  .banner-degraded {
+    border-color: color-mix(in srgb, var(--degraded) 50%, var(--line));
+    background: color-mix(in srgb, var(--degraded) 12%, var(--card));
+  }
+}
+
+.sr-only-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
 }

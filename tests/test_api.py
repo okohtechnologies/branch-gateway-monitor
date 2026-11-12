@@ -312,3 +312,58 @@ async def test_spa_blocks_path_traversal(dist, path):
     async with spa_client(dist) as c:
         r = await c.get(path)
         assert "TOP-SECRET" not in r.text
+
+
+# --- redesign support: sparklines, interval, Retry-After ---------------------------------------
+
+
+async def test_overview_includes_sparkline_and_interval(env):
+    client, mon, script, db = env
+    await login(client)
+    await client.post("/api/branches", json=BRANCH)
+    for _ in range(3):
+        await mon.run_cycle()
+    data = (await client.get("/api/branches")).json()
+    assert data["interval_s"] == mon.interval
+    spark = data["branches"][0]["spark"]
+    assert spark and spark[0]["v"] == 20.0 and spark[0]["d"] is False
+
+
+async def test_sparkline_marks_down_buckets_and_is_empty_for_new_branches(env):
+    client, mon, script, db = env
+    await login(client)
+    a = (await client.post("/api/branches", json=BRANCH)).json()["id"]
+    await client.post("/api/branches", json={"name": "Fresh", "host": "10.0.0.9"})
+    for _ in range(3):
+        await mon.run_cycle()
+    script.state[a] = DEAD
+    await mon.run_cycle()
+    by_name = {b["name"]: b for b in (await client.get("/api/branches")).json()["branches"]}
+    assert any(p["d"] for p in by_name["HQ"]["spark"])
+    assert len(by_name["Fresh"]["spark"]) >= 1  # also probed by the fake script
+    sparks = await db.sparklines()
+    assert set(sparks) == {b["id"] for b in by_name.values()}
+
+
+async def test_sparklines_limit_points_and_ignore_canary_and_old_data(env):
+    client, mon, script, db = env
+    bid = await db.upsert_branch("HQ", "10.0.0.1")
+    now = datetime.now(timezone.utc)
+    Status = __import__("ipmon.engine", fromlist=["Status"]).Status
+    for i in range(600):  # 600 checks in the last 50 minutes
+        await db.insert_check(bid, GOOD, Status.UP, now - timedelta(seconds=i * 5))
+    await db.insert_check(None, GOOD, Status.UP, now)  # canary: must not appear
+    await db.insert_check(bid, GOOD, Status.UP, now - timedelta(hours=3))  # too old
+    sp = await db.sparklines(3600, 30)
+    assert set(sp) == {bid}
+    assert 1 <= len(sp[bid]) <= 31
+
+
+async def test_lockout_response_carries_retry_after(env):
+    client, *_ = env
+    for _ in range(5):
+        await login(client, "nope")
+    r = await login(client, "nope")
+    assert r.status_code == 429
+    assert 1 <= int(r.headers["retry-after"]) <= 300
+    assert "minute" in r.json()["detail"]

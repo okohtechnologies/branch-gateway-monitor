@@ -37,3 +37,11 @@ export const fmtDateTime = (iso: string): string =>
     hour: "2-digit",
     minute: "2-digit",
   });
+
+/** Seconds since the last update, phrased for the freshness label. */
+export function fmtAge(seconds: number): string {
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  return `${Math.floor(seconds / 3600)}h ago`;
+}

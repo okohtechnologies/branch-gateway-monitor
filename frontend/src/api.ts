@@ -1,9 +1,11 @@
-import type { Branch, BranchDetail, BranchInput, Incident, Point, Range } from "./types";
+import type { Branch, BranchDetail, BranchesResponse, BranchInput, Incident, Point, Range } from "./types";
 
 export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Seconds to wait before retrying, from a Retry-After header (login lockout). */
+    public retryAfter?: number,
   ) {
     super(message);
   }
@@ -48,7 +50,12 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   if (!res.ok) {
     // A 401 on login itself just means wrong credentials, not an expired session.
     if (res.status === 401 && url !== "/api/login") onUnauthorized?.();
-    throw new ApiError(res.status, errorMessage(data, `Request failed (${res.status})`));
+    const wait = Number(res.headers.get("Retry-After"));
+    throw new ApiError(
+      res.status,
+      errorMessage(data, `Request failed (${res.status})`),
+      Number.isFinite(wait) && wait > 0 ? wait : undefined,
+    );
   }
   return data as T;
 }
@@ -62,7 +69,7 @@ export const api = {
   me: () => request<User>("GET", "/api/me"),
   login: (email: string, password: string) => request<User>("POST", "/api/login", { email, password }),
   logout: () => request<{ ok: boolean }>("POST", "/api/logout"),
-  branches: () => request<{ branches: Branch[]; monitor_suspect: boolean }>("GET", "/api/branches"),
+  branches: () => request<BranchesResponse>("GET", "/api/branches"),
   branch: (id: number) => request<BranchDetail>("GET", `/api/branches/${id}`),
   checks: (id: number, range: Range) =>
     request<{ points: Point[] }>("GET", `/api/branches/${id}/checks?range=${range}`),
@@ -70,6 +77,7 @@ export const api = {
     const q = new URLSearchParams();
     if (opts.branchId !== undefined) q.set("branch_id", String(opts.branchId));
     if (opts.openOnly) q.set("open_only", "true");
+    q.set("limit", "500");
     return request<{ incidents: Incident[] }>("GET", `/api/incidents?${q}`);
   },
   createBranch: (b: BranchInput) => request<Branch>("POST", "/api/branches", b),

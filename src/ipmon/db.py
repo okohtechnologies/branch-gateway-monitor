@@ -307,6 +307,30 @@ class Database:
             """
         )
 
+    async def sparklines(self, seconds: int = 3600, points: int = 30) -> dict[int, list[dict]]:
+        """Recent latency per branch, bucketed to about ``points`` values, in ONE query.
+
+        Each value is {"v": avg latency ms or None, "d": True if any check in the bucket was DOWN}.
+        """
+        bucket = max(1, seconds // points)
+        rows = await self.pool.fetch(
+            """
+            SELECT branch_id,
+                   floor(extract(epoch FROM ts) / $2) AS b,
+                   avg(avg_latency_ms) AS v,
+                   bool_or(status = 'DOWN') AS d
+            FROM checks
+            WHERE branch_id IS NOT NULL AND ts > now() - make_interval(secs => $1)
+            GROUP BY branch_id, b
+            ORDER BY branch_id, b
+            """,
+            float(seconds), float(bucket),
+        )
+        out: dict[int, list[dict]] = {}
+        for r in rows:
+            out.setdefault(r["branch_id"], []).append({"v": r["v"], "d": r["d"]})
+        return out
+
     async def uptime(self, branch_id: int) -> dict[str, float | None]:
         row = await self.pool.fetchrow(
             """

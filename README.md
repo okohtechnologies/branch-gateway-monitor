@@ -186,5 +186,10 @@ npm run dev                                # hot-reload UI on http://localhost:5
 npm run build                              # production build, served by the API from frontend/dist
 ```
 
+**Preview the dashboard with fake data** (no branches, network or Telegram needed): build the
+frontend, then run `.venv\Scripts\python scripts\demo_server.py` and open http://127.0.0.1:8123
+(sign in with `admin@demo.test` / `demo-password-123`). It uses a throwaway `demo_ui` schema in your
+local PostgreSQL and removes it on exit. Design rules are in [docs/design-system.md](docs/design-system.md).
+
 Layout: `src/ipmon/` holds `engine.py` (status rules, no I/O), `probe.py`, `runner.py` (the
 loop), `notifier.py`, `bot.py`, `heartbeat.py`, `api.py` and `db.py`.

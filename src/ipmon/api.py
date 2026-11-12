@@ -188,7 +188,12 @@ def create_app(
     async def login(body: LoginIn, request: Request, response: Response):
         ip = request.client.host if request.client else "unknown"
         if throttle.blocked(ip):
-            raise HTTPException(429, "Too many failed attempts. Try again later.")
+            wait = throttle.retry_after(ip)
+            raise HTTPException(
+                429,
+                f"Too many failed attempts. Try again in {max(1, round(wait / 60))} minute(s).",
+                headers={"Retry-After": str(wait)},
+            )
         row = await request.app.state.db.get_user(body.email)
         if not auth.verify_password(row["password_hash"] if row else None, body.password):
             throttle.record_failure(ip)
@@ -214,15 +219,17 @@ def create_app(
     @app.get("/api/branches")
     async def list_branches(request: Request, _: dict = Depends(current_user)):
         mon: Monitor = request.app.state.monitor
+        sparks = await request.app.state.db.sparklines()
         out = []
         for r in await request.app.state.db.overview():
             out.append(_branch_dict(r, mon, {
+                "spark": sparks.get(r["id"], []),
                 "latency_ms": r["avg_latency_ms"], "loss_pct": r["loss_pct"],
                 "last_check_at": r["last_ts"], "uptime_24h": r["uptime_24h"],
                 "incident_id": r["incident_id"], "incident_started_at": r["incident_started_at"],
                 "acknowledged_by": r["acknowledged_by"],
             }))
-        return {"branches": out, "monitor_suspect": mon.engine.monitor_suspect}
+        return {"branches": out, "monitor_suspect": mon.engine.monitor_suspect, "interval_s": mon.interval}
 
     @app.post("/api/branches", status_code=201)
     async def create_branch(body: BranchIn, request: Request, _: dict = Depends(current_user)):

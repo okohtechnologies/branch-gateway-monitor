@@ -1,21 +1,31 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Building2, CircleCheck, CircleX, LayoutGrid, Plus, Rows3, Search, SearchX, TriangleAlert, type LucideIcon } from "lucide-react";
 import { api } from "../api";
-import { fmtLoss, fmtMs, fmtUptime, timeAgo, duration } from "../format";
-import { useLive } from "../live";
+import { fmtAge, fmtLoss, fmtMs, fmtUptime, timeAgo } from "../format";
+import { useMediaQuery, useStoredChoice } from "../hooks";
+import { useFreshness, useLive } from "../live";
+import { countByStatus, filterBranches, parseFilter, sortBranches, type StatusFilter } from "../logic";
+import { Sparkline } from "../components/Sparkline";
+import { CardsSkeleton, Elapsed, EmptyState, ErrorState } from "../components/States";
 import { StatusPill } from "../components/StatusPill";
-import type { Branch, Status } from "../types";
+import type { Branch } from "../types";
 
-const ORDER: Record<Status, number> = { DOWN: 0, DEGRADED: 1, PENDING: 2, UP: 3, DISABLED: 4 };
-const FILTERS: Array<"ALL" | Status> = ["ALL", "DOWN", "DEGRADED", "UP", "PENDING", "DISABLED"];
+const VIEWS = ["cards", "table"] as const;
+const AUTO_TABLE_ABOVE = 18; // beyond this many branches, a dense table scans better than cards
 
 export function Overview() {
-  const { snapshots, transitionTick, monitorSuspect, connected, lastCycleAt } = useLive();
+  const { snapshots, transitionTick } = useLive();
+  const fresh = useFreshness();
   const [branches, setBranches] = useState<Branch[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"ALL" | Status>("ALL");
-  const [, setNow] = useState(0);
+  const [params, setParams] = useSearchParams();
+  const [viewPref, setViewPref] = useStoredChoice("overview-view", VIEWS);
+  const wide = useMediaQuery("(min-width: 768px)");
+
+  const filter = parseFilter(params.get("status"));
+  const setFilter = (f: StatusFilter) => setParams(f === "all" ? {} : { status: f }, { replace: true });
 
   const load = useCallback(() => {
     api
@@ -27,14 +37,14 @@ export function Overview() {
       .catch((e: Error) => setError(e.message));
   }, []);
 
-  // Refetch on status changes and every minute (uptime moves slowly).
+  // Refetch on status changes and every minute (uptime and sparklines move slowly).
   useEffect(load, [load, transitionTick]);
   useEffect(() => {
     const t = setInterval(load, 60_000);
     return () => clearInterval(t);
   }, [load]);
 
-  // A branch we have not loaded yet appears in the live feed: fetch the list again.
+  // A branch we have not loaded yet shows up in the live feed (added elsewhere): fetch again.
   const unknown = useMemo(
     () => branches !== null && Object.keys(snapshots).some((id) => !branches.some((b) => b.id === Number(id))),
     [branches, snapshots],
@@ -42,12 +52,6 @@ export function Overview() {
   useEffect(() => {
     if (unknown) load();
   }, [unknown, load]);
-
-  // Re-render every 15s so "x ago" labels stay honest between updates.
-  useEffect(() => {
-    const t = setInterval(() => setNow((n) => n + 1), 15_000);
-    return () => clearInterval(t);
-  }, []);
 
   const merged = useMemo(
     () =>
@@ -59,136 +63,281 @@ export function Overview() {
     [branches, snapshots],
   );
 
-  const counts = useMemo(() => {
-    const c = { UP: 0, DEGRADED: 0, DOWN: 0, PENDING: 0, DISABLED: 0 };
-    for (const b of merged) c[b.status]++;
-    return c;
-  }, [merged]);
+  const counts = useMemo(() => countByStatus(merged), [merged]);
+  const visible = useMemo(() => sortBranches(filterBranches(merged, query, filter)), [merged, query, filter]);
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return merged
-      .filter((b) => (filter === "ALL" || b.status === filter) && (!q || b.name.toLowerCase().includes(q)))
-      .sort((a, b) => ORDER[a.status] - ORDER[b.status] || a.name.localeCompare(b.name));
-  }, [merged, query, filter]);
+  if (error && branches === null) {
+    return (
+      <>
+        <PageHeader />
+        <ErrorState message={`Could not load branches: ${error}`} onRetry={load} />
+      </>
+    );
+  }
+  if (branches === null) {
+    return (
+      <>
+        <PageHeader />
+        <CardsSkeleton />
+      </>
+    );
+  }
 
-  if (error && branches === null) return <p role="alert" className="text-down">Could not load branches: {error}</p>;
-  if (branches === null) return <p className="text-muted">Loading…</p>;
+  const view = wide ? (viewPref ?? (branches.length > AUTO_TABLE_ABOVE ? "table" : "cards")) : "cards";
+  const allHealthy = branches.length > 0 && counts.DOWN === 0 && counts.DEGRADED === 0;
 
   return (
     <div>
-      {monitorSuspect && (
-        <div role="alert" className="mb-4 rounded-lg border border-degraded/50 bg-degraded/10 p-3 text-sm">
-          <strong className="text-degraded">Monitor may be offline.</strong> Every branch and the external canary are
-          unreachable at once, so the monitor's own network is the likely cause. Per-branch alerts are paused.
-        </div>
-      )}
-
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4" aria-label="Summary">
-        <Stat label="Up" value={counts.UP} tone="text-up" />
-        <Stat label="Degraded" value={counts.DEGRADED} tone="text-degraded" />
-        <Stat label="Down" value={counts.DOWN} tone="text-down" />
-        <Stat label="Total" value={branches.length} tone="text-ink" />
-      </div>
-
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search branches"
-          aria-label="Search branches by name"
-          className="w-full rounded-md border border-line bg-surface px-3 py-2 text-sm placeholder:text-muted sm:max-w-xs"
-        />
-        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Filter by status">
-          {FILTERS.map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              aria-pressed={filter === f}
-              className={`rounded-full border px-3 py-1 text-xs font-medium ${
-                filter === f ? "border-accent bg-accent/15 text-ink" : "border-line text-muted hover:text-ink"
-              }`}
-            >
-              {f === "ALL" ? "All" : f[0] + f.slice(1).toLowerCase()}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-muted sm:ml-auto">
-          {connected && lastCycleAt ? `Updated ${timeAgo(lastCycleAt)}` : connected ? "Waiting for first probe…" : "Live updates paused"}
+      <PageHeader>
+        <span className={`text-xs ${fresh.stale ? "font-semibold text-degraded" : "text-muted"}`} role="status">
+          {fresh.ageS === null
+            ? fresh.connected
+              ? "Waiting for the first probe…"
+              : "Live updates paused"
+            : fresh.stale
+              ? `Stale · last update ${fmtAge(fresh.ageS)}`
+              : `Updated ${fmtAge(fresh.ageS)}`}
         </span>
-      </div>
+      </PageHeader>
 
       {branches.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-line p-10 text-center">
-          <p className="font-medium">No branches yet</p>
-          <p className="mt-1 text-sm text-muted">Add your first branch to start monitoring.</p>
-          <Link to="/branches?new=1" className="mt-4 inline-block rounded-md bg-accent px-4 py-2 text-sm font-semibold text-bg">
-            Add a branch
-          </Link>
-        </div>
-      ) : visible.length === 0 ? (
-        <p className="text-muted">No branches match your filters.</p>
+        <EmptyState
+          icon={Building2}
+          title="No branches yet"
+          text="Add the gateway of your first branch and monitoring starts within seconds."
+          action={
+            <Link to="/branches?new=1" className="btn btn-primary">
+              <Plus className="size-4" aria-hidden /> Add a branch
+            </Link>
+          }
+        />
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visible.map((b) => (
-            <li key={b.id}>
-              <BranchCard b={b} />
-            </li>
-          ))}
-        </ul>
+        <>
+          <section className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Summary">
+            <Tile icon={CircleX} label="Down" count={counts.DOWN} tone="down" active={filter === "down"} onClick={() => setFilter(filter === "down" ? "all" : "down")} />
+            <Tile icon={TriangleAlert} label="Degraded" count={counts.DEGRADED} tone="degraded" active={filter === "degraded"} onClick={() => setFilter(filter === "degraded" ? "all" : "degraded")} />
+            <Tile icon={CircleCheck} label="Up" count={counts.UP} tone="up" active={filter === "up"} onClick={() => setFilter(filter === "up" ? "all" : "up")} />
+            <Tile icon={Building2} label="All branches" count={branches.length} tone="none" active={filter === "all"} onClick={() => setFilter("all")} />
+          </section>
+
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center">
+            <div className="relative md:w-72">
+              <label htmlFor="branch-search" className="sr-only">
+                Search branches by name, address or location
+              </label>
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted" aria-hidden />
+              <input
+                id="branch-search"
+                type="search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search name or address"
+                className="input pl-9"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="More filters">
+              {counts.PENDING > 0 && (
+                <button className="chip" aria-pressed={filter === "pending"} onClick={() => setFilter(filter === "pending" ? "all" : "pending")}>
+                  Pending <span className="num">{counts.PENDING}</span>
+                </button>
+              )}
+              {counts.DISABLED > 0 && (
+                <button className="chip" aria-pressed={filter === "disabled"} onClick={() => setFilter(filter === "disabled" ? "all" : "disabled")}>
+                  Disabled <span className="num">{counts.DISABLED}</span>
+                </button>
+              )}
+            </div>
+            <div className="hidden items-center gap-1 md:ml-auto md:flex" role="group" aria-label="View">
+              <button className="icon-btn" aria-pressed={view === "cards"} aria-label="Card view" title="Card view" onClick={() => setViewPref("cards")}>
+                <LayoutGrid className={`size-5 ${view === "cards" ? "text-ink" : ""}`} aria-hidden />
+              </button>
+              <button className="icon-btn" aria-pressed={view === "table"} aria-label="Table view" title="Table view" onClick={() => setViewPref("table")}>
+                <Rows3 className={`size-5 ${view === "table" ? "text-ink" : ""}`} aria-hidden />
+              </button>
+            </div>
+          </div>
+
+          {allHealthy && filter === "all" && !query && (
+            <p className="mb-4 flex items-center gap-2 text-sm text-muted">
+              <CircleCheck className="size-4 text-up" aria-hidden />
+              All {branches.length} branch{branches.length === 1 ? "" : "es"} {branches.length === 1 ? "is" : "are"} up.
+            </p>
+          )}
+
+          {visible.length === 0 ? (
+            <EmptyState
+              icon={SearchX}
+              title="No branches match your filters"
+              action={
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setQuery("");
+                    setFilter("all");
+                  }}
+                >
+                  Clear filters
+                </button>
+              }
+            />
+          ) : view === "table" ? (
+            <BranchTable branches={visible} />
+          ) : (
+            <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {visible.map((b) => (
+                <li key={b.id}>
+                  <BranchCard b={b} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
+function PageHeader({ children }: { children?: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-line bg-surface px-4 py-3">
-      <div className={`text-2xl font-bold tabular-nums ${tone}`}>{value}</div>
-      <div className="text-xs text-muted">{label}</div>
+    <div className="mb-4 flex items-baseline justify-between gap-3">
+      <h1 className="text-xl font-semibold tracking-tight">Overview</h1>
+      {children}
     </div>
   );
 }
 
-function BranchCard({ b }: { b: Branch }) {
-  const border =
-    b.status === "DOWN" ? "border-down/60" : b.status === "DEGRADED" ? "border-degraded/60" : "border-line";
+const TONE = {
+  down: { text: "text-down", wash: "tone-down" },
+  degraded: { text: "text-degraded", wash: "tone-degraded" },
+  up: { text: "text-up", wash: "" },
+  none: { text: "text-ink", wash: "" },
+} as const;
+
+function Tile({ icon: Icon, label, count, tone, active, onClick }: { icon: LucideIcon; label: string; count: number; tone: keyof typeof TONE; active: boolean; onClick: () => void }) {
+  const t = TONE[tone];
+  const alert = (tone === "down" || tone === "degraded") && count > 0;
   return (
-    <Link
-      to={`/branches/${b.id}`}
-      className={`block rounded-xl border ${border} bg-surface p-4 transition-colors hover:bg-surface-2`}
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`card flex min-h-[4.5rem] cursor-pointer items-center gap-3 p-3.5 text-left transition-colors duration-150 hover:bg-card2 ${alert ? t.wash : ""} ${active ? "ring-2 ring-accent" : ""}`}
     >
-      <div className="flex items-start justify-between gap-2">
+      <Icon className={`size-6 shrink-0 ${alert || tone === "up" ? t.text : "text-muted"}`} aria-hidden />
+      <span>
+        <span className={`num block text-2xl leading-none font-semibold ${alert || tone === "up" ? t.text : "text-ink"}`}>{count}</span>
+        <span className="mt-1 block text-xs text-muted">{label}</span>
+      </span>
+    </button>
+  );
+}
+
+function latencyText(b: Branch): string {
+  if (b.status === "PENDING" || b.status === "DISABLED") return "—";
+  return b.status === "DOWN" || b.latency_ms == null ? "No reply" : fmtMs(b.latency_ms);
+}
+
+function incidentLine(b: Branch) {
+  if (b.incident_started_at && (b.status === "DOWN" || b.status === "DEGRADED")) {
+    return (
+      <>
+        {b.status === "DOWN" ? "Down" : "Degraded"} for <Elapsed since={b.incident_started_at} />
+        {" · "}
+        {b.acknowledged_by ? `Acknowledged by ${b.acknowledged_by}` : <span className="font-medium text-ink">Not acknowledged</span>}
+      </>
+    );
+  }
+  return null;
+}
+
+const BranchCard = memo(function BranchCard({ b }: { b: Branch }) {
+  const tone = b.status === "DOWN" ? "tone-down" : b.status === "DEGRADED" ? "tone-degraded" : "";
+  const bad = b.status === "DOWN";
+  const incident = incidentLine(b);
+  return (
+    <Link to={`/branches/${b.id}`} className={`card block p-4 transition-colors duration-150 hover:bg-card2 ${tone}`}>
+      <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="truncate font-semibold">{b.name}</h3>
-          <p className="truncate font-mono text-xs text-muted">{b.host}</p>
+          <h2 className="truncate font-semibold">{b.name}</h2>
+          <p className="mono truncate text-xs text-muted">
+            {b.host}
+            {b.probe_type === "tcp" ? `:${b.port}` : ""}
+          </p>
         </div>
         <StatusPill status={b.status} />
       </div>
 
-      <dl className="mt-4 grid grid-cols-3 gap-2 text-sm">
-        <Metric label="Latency" value={fmtMs(b.latency_ms)} />
-        <Metric label="Loss" value={fmtLoss(b.loss_pct)} />
-        <Metric label="24h uptime" value={fmtUptime(b.uptime_24h)} />
-      </dl>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <dl className="grid flex-1 grid-cols-3 gap-2">
+          <Metric label="Latency" value={latencyText(b)} tone={bad ? "text-down" : ""} />
+          <Metric label="Loss" value={b.status === "PENDING" || b.status === "DISABLED" ? "—" : fmtLoss(b.loss_pct)} tone={(b.loss_pct ?? 0) > 0 ? "text-degraded" : ""} />
+          <Metric label="24h uptime" value={fmtUptime(b.uptime_24h)} />
+        </dl>
+        <Sparkline points={b.spark} />
+      </div>
 
       <p className="mt-3 truncate text-xs text-muted">
-        {b.incident_started_at
-          ? `${b.status === "DOWN" ? "Down" : "Degraded"} for ${duration(b.incident_started_at)}${
-              b.acknowledged_by ? ` · ack by ${b.acknowledged_by}` : ""
-            }`
-          : b.location || `Checked ${timeAgo(b.last_check_at)}`}
+        {incident ?? (b.status === "DISABLED" ? "Monitoring is off" : b.location ? `${b.location} · checked ${timeAgo(b.last_check_at)}` : `Checked ${timeAgo(b.last_check_at)}`)}
       </p>
     </Link>
   );
+});
+
+function Metric({ label, value, tone = "" }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-xs tracking-wide text-muted uppercase">{label}</dt>
+      <dd className={`num truncate text-sm font-semibold ${tone}`}>{value}</dd>
+    </div>
+  );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function BranchTable({ branches }: { branches: Branch[] }) {
+  const navigate = useNavigate();
   return (
-    <div>
-      <dt className="text-[11px] uppercase tracking-wide text-muted">{label}</dt>
-      <dd className="font-medium tabular-nums">{value}</dd>
+    <div className="card overflow-x-auto">
+      <table className="w-full min-w-[820px] text-sm">
+        <caption className="sr-only">Branches, problems first</caption>
+        <thead className="border-b border-line">
+          <tr>
+            <th scope="col" className="th">Status</th>
+            <th scope="col" className="th">Branch</th>
+            <th scope="col" className="th text-right">Latency</th>
+            <th scope="col" className="th text-right">Loss</th>
+            <th scope="col" className="th text-right">24h uptime</th>
+            <th scope="col" className="th">Last hour</th>
+            <th scope="col" className="th">Incident</th>
+          </tr>
+        </thead>
+        <tbody>
+          {branches.map((b) => {
+            const incident = incidentLine(b);
+            return (
+              <tr
+                key={b.id}
+                onClick={() => navigate(`/branches/${b.id}`)}
+                className={`cursor-pointer border-t border-line transition-colors duration-150 hover:bg-card2 ${b.status === "DOWN" ? "tone-down" : b.status === "DEGRADED" ? "tone-degraded" : ""}`}
+              >
+                <td className="td"><StatusPill status={b.status} /></td>
+                <td className="td">
+                  <Link to={`/branches/${b.id}`} className="font-semibold hover:underline" onClick={(e) => e.stopPropagation()}>
+                    {b.name}
+                  </Link>
+                  <div className="mono text-xs text-muted">
+                    {b.host}
+                    {b.probe_type === "tcp" ? `:${b.port}` : ""}
+                  </div>
+                </td>
+                <td className={`td num text-right font-medium ${b.status === "DOWN" ? "text-down" : ""}`}>{latencyText(b)}</td>
+                <td className={`td num text-right ${(b.loss_pct ?? 0) > 0 ? "text-degraded" : ""}`}>{b.status === "PENDING" || b.status === "DISABLED" ? "—" : fmtLoss(b.loss_pct)}</td>
+                <td className="td num text-right">{fmtUptime(b.uptime_24h)}</td>
+                <td className="td"><Sparkline points={b.spark} /></td>
+                <td className="td text-xs text-muted">{incident ?? "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
