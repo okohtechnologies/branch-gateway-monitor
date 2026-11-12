@@ -114,6 +114,16 @@ or tickets. To rotate the bot token, revoke it with `@BotFather`, update `.env`,
   ```
   (On Windows PowerShell, use Git Bash for the `gunzip` line, or unzip the file first and pipe it
   with `Get-Content`.)
+- **Undelivered alerts are retried.** If Telegram cannot be reached, a DOWN, DEGRADED, RECOVERED or
+  monitor-offline alert is saved and re-sent automatically (after 1, 2, 4 ... up to 15 minutes), marked
+  "DELAYED ALERT" with its original time, in the original order. Acknowledge and Mute buttons are only
+  attached while the incident is still open. Alerts older than 24 hours are dropped, and reminders are
+  never queued (the next one follows anyway). While any are waiting, the dashboard shows a warning and
+  `/health` reports `alerts_pending`.
+- **Sessions are real.** Signing out ends the session on the server, so a copied cookie stops working.
+  "Sign out of all devices" (sidebar) ends every session for the account, and resetting a password with
+  `create_admin.py` signs out every device too. A live dashboard on another device notices within about
+  30 seconds. After upgrading from an older version, everyone must sign in once more.
 - **History is pruned.** Raw checks older than `RETENTION_DAYS` (default 30) are deleted at start-up
   and every 6 hours. Incidents and the notification log are kept. Set `RETENTION_DAYS=0` to keep
   everything.

@@ -1,144 +1,118 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { Activity, Building2, CircleX, LayoutDashboard, LogOut, Moon, Siren, Sun, TriangleAlert, WifiOff, type LucideIcon } from "lucide-react";
+import { Activity, LogOut, Moon, ShieldOff, Sun } from "lucide-react";
 import { useAuth } from "../auth";
-import { useFreshness, useLive } from "../live";
+import { useMediaQuery, useStoredChoice } from "../hooks";
+import { useLive } from "../live";
 import { useTheme } from "../theme";
+import { Modal } from "./Modal";
+import { Sidebar } from "./Sidebar";
+import { Banners, NAV, navActive, useLiveState, useProblemCounts } from "./chrome";
 
-const NAV: Array<{ to: string; label: string; icon: LucideIcon; end?: boolean }> = [
-  { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
-  { to: "/branches", label: "Branches", icon: Building2, end: true },
-  { to: "/incidents", label: "Incidents", icon: Siren },
-];
+const PIN_CHOICES = ["pinned", "auto"] as const;
 
-const topLink = ({ isActive }: { isActive: boolean }) =>
-  `inline-flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium transition-colors duration-150 ${
-    isActive ? "bg-card2 text-ink" : "text-muted hover:text-ink"
-  }`;
-
-const tabLink = ({ isActive }: { isActive: boolean }) =>
-  `flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium transition-colors duration-150 ${
-    isActive ? "text-accent" : "text-muted"
-  }`;
-
-function LiveIndicator() {
-  const { stale, connected } = useFreshness();
-  const state = !connected
-    ? { label: "Reconnecting", dot: "bg-degraded motion-safe:animate-pulse", tip: "Live updates disconnected, retrying" }
-    : stale
-      ? { label: "Stale", dot: "bg-degraded", tip: "No recent probe results" }
-      : { label: "Live", dot: "bg-up", tip: "Receiving live updates" };
-  return (
-    <span className="flex items-center gap-1.5 text-xs font-medium text-muted" role="status" title={state.tip}>
-      <span className={`size-2 rounded-full ${state.dot}`} aria-hidden />
-      {state.label}
-    </span>
-  );
-}
+const tabLink = (active: boolean) =>
+  `flex min-h-14 flex-1 flex-col items-center justify-center gap-0.5 text-xs font-medium transition-colors duration-150 ${active ? "text-accent" : "text-muted"}`;
 
 export function Layout() {
-  const { user, logout } = useAuth();
-  const { snapshots, monitorSuspect, announcement } = useLive();
-  const [theme, toggleTheme] = useTheme();
-  // /branches/:id is reached from the Overview, so that tab stays highlighted there.
+  const { announcement } = useLive();
+  const { down, degraded } = useProblemCounts();
   const onDetail = useLocation().pathname.startsWith("/branches/");
-
-  const { down, degraded } = useMemo(() => {
-    let d = 0;
-    let g = 0;
-    for (const s of Object.values(snapshots)) {
-      if (s.status === "DOWN") d++;
-      else if (s.status === "DEGRADED") g++;
-    }
-    return { down: d, degraded: g };
-  }, [snapshots]);
+  const canHover = useMediaQuery("(hover: hover)");
+  const [pinPref, setPinPref] = useStoredChoice("sidebar", PIN_CHOICES);
+  // Without a saved choice: hover-capable screens auto-hide, touch-only screens start pinned open.
+  const pinned = pinPref ? pinPref === "pinned" : !canHover;
 
   // Problems show in the browser tab, so they are visible from another window too.
   useEffect(() => {
     document.title = down ? `(${down} down) Branch Monitor` : degraded ? `(${degraded} degraded) Branch Monitor` : "Branch Monitor";
   }, [down, degraded]);
 
-  const problem = down > 0 || degraded > 0;
-
   return (
-    <div className="min-h-screen pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0">
-      <header className="sticky top-0 z-40 border-b border-line bg-card/95 backdrop-blur">
-        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-2 px-4">
-          <Link to="/" className="mr-2 flex min-h-11 items-center gap-2 rounded-lg font-semibold tracking-tight">
-            <Activity className="size-5 text-accent" aria-hidden />
-            Branch Monitor
-          </Link>
-          <nav className="hidden flex-1 gap-1 md:flex" aria-label="Main">
-            {NAV.map(({ to, label, icon: Icon, end }) => (
-              <NavLink key={to} to={to} end={end} className={({ isActive }) => topLink({ isActive: isActive || (to === "/" && onDetail) })}>
-                <Icon className="size-4" aria-hidden />
-                {label}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="flex-1 md:hidden" />
-          <LiveIndicator />
-          <button
-            onClick={toggleTheme}
-            className="icon-btn"
-            aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-            title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-          >
-            {theme === "dark" ? <Sun className="size-5" aria-hidden /> : <Moon className="size-5" aria-hidden />}
-          </button>
-          <button onClick={logout} className="icon-btn" aria-label={`Sign out ${user?.email ?? ""}`} title={`Sign out (${user?.email ?? ""})`}>
-            <LogOut className="size-5" aria-hidden />
-          </button>
+    <div className="min-h-screen">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-[70] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2.5 focus:text-sm focus:font-semibold focus:text-onprimary"
+      >
+        Skip to main content
+      </a>
+
+      {/* Phones: a compact header with the attention banners, plus a bottom tab bar. */}
+      <MobileHeader />
+
+      {/* Desktop: the auto-hiding sidebar. */}
+      <Sidebar pinned={pinned} onTogglePin={() => setPinPref(pinned ? "auto" : "pinned")} />
+
+      {/* The page only makes room for the slim rail (or the pinned sidebar): hover never shifts content. */}
+      <div className={`pb-[calc(3.5rem+env(safe-area-inset-bottom))] md:pb-0 md:transition-[padding] md:duration-200 ${pinned ? "md:pl-60" : "md:pl-14"}`}>
+        <Banners region />
+
+        {/* Announces status changes (not every refresh) to screen readers. */}
+        <div aria-live="polite" role="status" className="sr-only-live">
+          {announcement?.text}
         </div>
 
-        {monitorSuspect && (
-          <div role="status" className="banner-degraded border-y">
-            <div className="mx-auto flex max-w-[1440px] items-start gap-3 px-4 py-2.5 text-sm">
-              <WifiOff className="mt-0.5 size-4 shrink-0 text-degraded" aria-hidden />
-              <p>
-                <strong className="text-degraded">Monitor may be offline.</strong> Every branch and the external canary are unreachable at
-                once, so the monitor's own network is the likely cause. Per-branch alerts are paused until it recovers.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {problem && !monitorSuspect && (
-          <div className={`${down ? "banner-down" : "banner-degraded"} border-y`}>
-            <Link
-              to={`/?status=${down ? "down" : "degraded"}`}
-              className="mx-auto flex min-h-11 max-w-[1440px] items-center gap-3 px-4 text-sm md:min-h-10"
-            >
-              {down ? <CircleX className="size-4 shrink-0 text-down" aria-hidden /> : <TriangleAlert className="size-4 shrink-0 text-degraded" aria-hidden />}
-              <span className="min-w-0 flex-1 font-medium">
-                {[down ? `${down} down` : null, degraded ? `${degraded} degraded` : null].filter(Boolean).join(" · ")}
-              </span>
-              <span className="shrink-0 font-semibold text-accent underline underline-offset-2">View</span>
-            </Link>
-          </div>
-        )}
-      </header>
-
-      {/* Announces status changes (not every refresh) to screen readers. */}
-      <div aria-live="polite" role="status" className="sr-only-live">
-        {announcement?.text}
+        <main id="main" tabIndex={-1} className="mx-auto max-w-[1440px] px-4 py-5 outline-none md:px-6 md:py-6">
+          <Outlet />
+        </main>
       </div>
-
-      <main className="mx-auto max-w-[1440px] px-4 py-5 md:py-6">
-        <Outlet />
-      </main>
 
       <nav
         className="fixed inset-x-0 bottom-0 z-40 flex border-t border-line bg-card pb-[env(safe-area-inset-bottom)] md:hidden"
         aria-label="Main"
       >
         {NAV.map(({ to, label, icon: Icon, end }) => (
-          <NavLink key={to} to={to} end={end} className={({ isActive }) => tabLink({ isActive: isActive || (to === "/" && onDetail) })}>
+          <NavLink key={to} to={to} end={end} className={({ isActive }) => tabLink(navActive(to, isActive, onDetail))}>
             <Icon className="size-5" aria-hidden />
             {label}
           </NavLink>
         ))}
       </nav>
     </div>
+  );
+}
+
+function MobileHeader() {
+  const { user, logout, logoutAll } = useAuth();
+  const [theme, toggleTheme] = useTheme();
+  const live = useLiveState();
+  const [account, setAccount] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-40 border-b border-line bg-card/95 backdrop-blur md:hidden">
+      <div className="flex h-14 items-center gap-2 px-4">
+        <Link to="/" className="mr-auto flex min-h-11 items-center gap-2 rounded-lg font-semibold tracking-tight">
+          <Activity className="size-5 text-accent" aria-hidden />
+          Branch Monitor
+        </Link>
+        <span className="flex items-center gap-1.5 text-xs font-medium text-muted" role="status" title={live.tip}>
+          <span className={`size-2 rounded-full ${live.dot}`} aria-hidden />
+          {live.label}
+        </span>
+        <button onClick={toggleTheme} className="icon-btn" aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}>
+          {theme === "dark" ? <Sun className="size-5" aria-hidden /> : <Moon className="size-5" aria-hidden />}
+        </button>
+        <button onClick={() => setAccount(true)} className="icon-btn" aria-label="Account and sign out">
+          <LogOut className="size-5" aria-hidden />
+        </button>
+      </div>
+      <Banners />
+
+      {account && (
+        <Modal title="Account" onClose={() => setAccount(false)}>
+          <p className="text-sm text-muted">Signed in as</p>
+          <p className="mb-5 font-medium break-all">{user?.email}</p>
+          <div className="flex flex-col gap-2">
+            <button className="btn btn-secondary" data-autofocus onClick={logout}>
+              <LogOut className="size-4" aria-hidden /> Sign out
+            </button>
+            <button className="btn btn-ghost" onClick={logoutAll}>
+              <ShieldOff className="size-4" aria-hidden /> Sign out of all devices
+            </button>
+          </div>
+          <p className="mt-3 text-xs text-muted">Signing out of all devices also signs out this browser.</p>
+        </Modal>
+      )}
+    </header>
   );
 }

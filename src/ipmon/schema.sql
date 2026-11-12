@@ -62,3 +62,25 @@ CREATE INDEX IF NOT EXISTS mutes_branch_until ON mutes (branch_id, until);
 
 -- A muted notification is recorded but never sent.
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS suppressed BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Alerts that could not be delivered are kept here and retried (see Monitor._retry_notifications).
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS body TEXT;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS buttons JSONB;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS gave_up BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS notifications_retry ON notifications (next_attempt_at)
+    WHERE NOT success AND NOT gave_up AND body IS NOT NULL;
+
+-- Server-side sessions: a signed cookie alone is not enough, so logout and password resets can end it.
+CREATE TABLE IF NOT EXISTS sessions (
+    id         TEXT PRIMARY KEY,
+    email      TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked    BOOLEAN NOT NULL DEFAULT FALSE,
+    ip         TEXT,
+    user_agent TEXT
+);
+CREATE INDEX IF NOT EXISTS sessions_email_active ON sessions (email) WHERE NOT revoked;

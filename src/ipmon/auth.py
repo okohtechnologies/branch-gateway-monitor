@@ -25,18 +25,24 @@ def verify_password(stored_hash: str | None, password: str) -> bool:
         return False
 
 
-def make_token(secret: str, email: str, role: str, hours: int) -> str:
+def make_token(secret: str, email: str, role: str, hours: int, jti: str | None = None) -> str:
+    """``jti`` is the server-side session id; the token is only honoured while that session is active."""
     exp = datetime.now(timezone.utc) + timedelta(hours=hours)
-    return jwt.encode({"sub": email, "role": role, "exp": exp}, secret, algorithm="HS256")
+    claims = {"sub": email, "role": role, "exp": exp}
+    if jti is not None:
+        claims["jti"] = jti
+    return jwt.encode(claims, secret, algorithm="HS256")
 
 
 def read_token(secret: str, token: str | None) -> dict | None:
     if not token:
         return None
     try:
-        return jwt.decode(token, secret, algorithms=["HS256"])
+        claims = jwt.decode(token, secret, algorithms=["HS256"])
     except jwt.PyJWTError:
         return None
+    # Tokens issued before sessions existed carry no session id: they can no longer be revoked, so reject them.
+    return claims if claims.get("jti") else None
 
 
 class LoginThrottle:

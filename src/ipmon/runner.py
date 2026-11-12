@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from .db import Database
 from .engine import (
@@ -17,6 +18,7 @@ from .engine import (
 )
 from .notifier import (
     alert_buttons,
+    format_delayed,
     format_monitor_recovered,
     format_monitor_suspect,
     format_reminder,
@@ -55,6 +57,7 @@ class Monitor:
         self.engine = Engine(confirm)
         self.latest: dict[int, dict] = {}  # branch_id -> last probe snapshot
         self.last_cycle_at: datetime | None = None
+        self.alerts_pending = 0  # undelivered alerts waiting to be re-sent
         self.cycles = 0
         self._subscribers: set[asyncio.Queue] = set()
 
@@ -91,12 +94,13 @@ class Monitor:
 
     async def maybe_prune(self) -> int:
         """Delete expired raw checks at start-up and then every few hours."""
-        if not self.retention_days:
-            return 0
         now = time.monotonic()
         if self._last_prune is not None and now - self._last_prune < self.PRUNE_EVERY_S:
             return 0
         self._last_prune = now
+        await self.db.prune_sessions()
+        if not self.retention_days:
+            return 0
         removed = await self.db.prune_checks(self.retention_days)
         if removed:
             log.info("pruned %d checks older than %d days", removed, self.retention_days)
@@ -154,6 +158,8 @@ class Monitor:
         for event in events:
             await self._handle(event, by_id, now)
         await self._send_reminders(now)
+        await self._retry_notifications(now)
+        self.alerts_pending = await self.db.pending_alert_count()
 
         self.cycles += 1
         self.last_cycle_at = now
@@ -164,6 +170,7 @@ class Monitor:
             "type": "cycle",
             "ts": now.isoformat(),
             "monitor_suspect": self.engine.monitor_suspect,
+            "alerts_pending": self.alerts_pending,
             "branches": snapshot,
         })
         return events
@@ -202,7 +209,38 @@ class Monitor:
             await self.db.record_notification(incident_id, kind, "telegram", True, None, suppressed=True)
             return
         ok, err = await self.notifier.send(text, buttons)
-        await self.db.record_notification(incident_id, kind, "telegram", ok, err)
+        # A failed alert keeps its text so it can be re-sent. Reminders are not queued: the next one follows anyway.
+        keep = (not ok) and kind != "REMINDER"
+        await self.db.record_notification(
+            incident_id, kind, "telegram", ok, err,
+            body=text if keep else None, buttons=buttons if keep else None,
+        )
+
+    RETRY_GIVE_UP = timedelta(hours=24)
+    RETRY_MAX_DELAY_S = 900
+
+    async def _retry_notifications(self, now: datetime) -> None:
+        """Re-send alerts that could not be delivered, oldest first, with growing delays.
+
+        Stops at the first failure: if Telegram is unreachable the rest would fail as well.
+        """
+        for r in await self.db.due_notification_retries(limit=10):
+            if now - r["sent_at"] > self.RETRY_GIVE_UP:
+                await self.db.give_up_notification(r["id"])
+                log.warning("gave up re-sending a %s alert older than 24h", r["kind"])
+                continue
+            buttons = None
+            if r["buttons"] and r["incident_id"] is not None and await self.db.incident_is_open(r["incident_id"]):
+                # Buttons only make sense while the incident is still open.
+                buttons = [[tuple(b) for b in row] for row in json.loads(r["buttons"])]
+            ok, err = await self.notifier.send(format_delayed(r["body"], r["sent_at"]), buttons)
+            if ok:
+                await self.db.mark_notification_delivered(r["id"])
+                log.info("delivered a delayed %s alert after %d earlier attempt(s)", r["kind"], r["attempts"] + 1)
+            else:
+                delay = min(self.RETRY_MAX_DELAY_S, 60 * 2 ** (r["attempts"] + 1))
+                await self.db.reschedule_notification(r["id"], delay, err)
+                break
 
     async def _send_reminders(self, now: datetime) -> None:
         """FR-13: re-alert for incidents still open and unacknowledged."""

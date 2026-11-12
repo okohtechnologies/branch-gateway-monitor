@@ -50,6 +50,23 @@ minimum 12px.
 - Every control on a phone is at least **44px** tall (`.btn`, `.icon-btn`, `.chip`, `.input`).
 - Wide tables that must scroll sideways are keyboard-focusable (`tabIndex={0}` with a label).
 
+## Navigation
+
+- **Desktop: an auto-hiding sidebar.** A slim 56px icon rail is always visible; hovering it (with a
+  short intent delay, so a pointer merely passing the edge does not open it) or tabbing into it slides
+  out the full 240px sidebar **over** the page, so content and charts never shift. A pin button keeps
+  it open and pushes the content over. Touch-only screens, which cannot hover, start pinned.
+- Keyboard: only *keyboard* focus opens it (a mouse click must not leave it stuck open). Esc closes
+  it and moves focus to the page. The first Tab stop is a "Skip to main content" link.
+- Labels fade out when collapsed (opacity, not clipping, so no half letters show at the edge and
+  screen readers still read them).
+- **Phones:** a compact top header plus a bottom tab bar; the account dialog offers Sign out and Sign
+  out of all devices.
+- The sidebar bottom group holds: live status, the signed-in account, theme, Sign out, and Sign out of
+  all devices (which asks first and focuses Cancel).
+- Alerts that need attention stack above the page in an "Alerts" landmark: undelivered Telegram
+  alerts, "monitor may be offline", then "N down / N degraded". The region is not rendered when empty.
+
 ## Components
 
 Defined in `index.css` (`.card`, `.btn*`, `.icon-btn`, `.input`, `.chip`, `.th`, `.td`,

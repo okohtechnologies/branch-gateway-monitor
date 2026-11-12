@@ -6,6 +6,8 @@ interface AuthState {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** Ends the session on every device, then signs this one out. */
+  logoutAll: () => Promise<void>;
 }
 
 const Ctx = createContext<AuthState | null>(null);
@@ -34,7 +36,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const value = useMemo(() => ({ user, loading, login, logout }), [user, loading, login, logout]);
+  const logoutAll = useCallback(async () => {
+    await api.logoutAll().catch(() => undefined);
+    setUser(null);
+  }, []);
+
+  const value = useMemo(() => ({ user, loading, login, logout, logoutAll }), [user, loading, login, logout, logoutAll]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

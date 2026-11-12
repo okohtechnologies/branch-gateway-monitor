@@ -260,17 +260,165 @@ async def test_health_reports_fresh_and_stale_loop(env):
 # --- websocket -----------------------------------------------------------------------
 
 
-def test_websocket_requires_auth_and_says_hello():
+class FakeSessionDb:
+    """Just enough database for the WebSocket route: whether a session is still active."""
+
+    def __init__(self, active=True):
+        self.active = active
+
+    async def session_active(self, sid):
+        return self.active
+
+
+def ws_app(active=True):
     mon = Monitor(None, FakeNotifier(), probe_fn=Script())
-    app = create_app(make_settings(), db=object(), monitor=mon, run_monitor=False, static_dir=None)
+    fake = FakeSessionDb(active)
+    app = create_app(make_settings(), db=fake, monitor=mon, run_monitor=False, static_dir=None)
+    return app, mon, fake
+
+
+def test_websocket_requires_auth_and_says_hello():
+    app, mon, _ = ws_app()
     client = TestClient(app)
     with pytest.raises(Exception):
         with client.websocket_connect("/ws"):
             pass
-    client.cookies.set(auth.COOKIE, auth.make_token(SECRET, "a@b.c", "admin", 1))
+    client.cookies.set(auth.COOKIE, auth.make_token(SECRET, "a@b.c", "admin", 1, "sid-1"))
     with client.websocket_connect("/ws") as ws:
         assert ws.receive_json() == {"type": "hello"}
     assert mon._subscribers == set()  # cleaned up on disconnect
+
+
+def test_websocket_refuses_a_revoked_session():
+    app, _, _ = ws_app(active=False)
+    client = TestClient(app)
+    client.cookies.set(auth.COOKIE, auth.make_token(SECRET, "a@b.c", "admin", 1, "sid-1"))
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws"):
+            pass
+
+
+def test_websocket_is_closed_when_its_session_is_revoked_while_connected(monkeypatch):
+    monkeypatch.setattr("ipmon.api.WS_RECHECK_S", 0.2)
+    app, mon, fake = ws_app()
+    client = TestClient(app)
+    client.cookies.set(auth.COOKIE, auth.make_token(SECRET, "a@b.c", "admin", 1, "sid-1"))
+    with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json() == {"type": "hello"}
+        fake.active = False  # signed out from another device
+        with pytest.raises(Exception) as closed:
+            ws.receive_json()
+    assert "4401" in repr(closed.value) or "WebSocketDisconnect" in repr(closed.value)
+    assert mon._subscribers == set()
+
+
+# --- sessions are real: logout, sign out everywhere, password reset -----------------------------
+
+
+async def second_client(env):
+    """A separate browser for the same account."""
+    _, mon, _, db = env
+    app = create_app(make_settings(), db=db, monitor=mon, run_monitor=False, static_dir=None)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def test_login_creates_a_server_side_session(env):
+    client, mon, script, db = env
+    await login(client)
+    row = await db.pool.fetchrow("SELECT email, revoked, expires_at > now() AS live, user_agent FROM sessions")
+    assert row["email"] == "admin@example.com" and row["revoked"] is False and row["live"] is True
+
+
+async def test_logout_really_ends_the_session_even_if_the_cookie_was_copied(env):
+    client, mon, script, db = env
+    await login(client)
+    copied = client.cookies.get(auth.COOKIE)
+    assert (await client.get("/api/me")).status_code == 200
+    await client.post("/api/logout")
+    assert await db.pool.fetchval("SELECT revoked FROM sessions") is True
+    thief = await second_client(env)
+    thief.cookies.set(auth.COOKIE, copied)
+    assert (await thief.get("/api/me")).status_code == 401  # the stolen copy is dead
+    assert (await thief.get("/api/branches")).status_code == 401
+
+
+async def test_sign_out_everywhere_ends_every_device_but_not_other_users(env):
+    client, mon, script, db = env
+    other = await second_client(env)
+    await db.create_user("other@example.com", auth.hash_password("another-password"))
+    await login(client)
+    await other.post("/api/login", json={"email": "admin@example.com", "password": "correct-horse"})
+    stranger = await second_client(env)
+    await stranger.post("/api/login", json={"email": "other@example.com", "password": "another-password"})
+    assert (await other.get("/api/me")).status_code == 200
+
+    r = await client.post("/api/logout-all")
+    assert r.status_code == 200 and r.json()["signed_out"] == 2
+    assert (await client.get("/api/me")).status_code == 401
+    assert (await other.get("/api/me")).status_code == 401  # the other device is signed out too
+    assert (await stranger.get("/api/me")).status_code == 200  # a different account is untouched
+
+
+async def test_sign_out_everywhere_requires_login(env):
+    client, *_ = env
+    assert (await client.post("/api/logout-all")).status_code == 401
+
+
+async def test_expired_session_is_rejected_even_with_a_valid_cookie(env):
+    client, mon, script, db = env
+    await login(client)
+    await db.pool.execute("UPDATE sessions SET expires_at = now() - interval '1 minute'")
+    assert (await client.get("/api/me")).status_code == 401
+
+
+async def test_token_without_a_session_id_is_rejected(env):
+    client, *_ = env
+    client.cookies.set(auth.COOKIE, auth.make_token(SECRET, "admin@example.com", "admin", 1))  # no jti
+    assert (await client.get("/api/me")).status_code == 401
+
+
+async def test_token_for_an_unknown_session_is_rejected(env):
+    client, *_ = env
+    client.cookies.set(auth.COOKIE, auth.make_token(SECRET, "admin@example.com", "admin", 1, "never-created"))
+    assert (await client.get("/api/me")).status_code == 401
+
+
+async def test_password_reset_signs_out_every_device(env):
+    client, mon, script, db = env
+    await login(client)
+    assert (await client.get("/api/me")).status_code == 200
+    await db.create_user("admin@example.com", auth.hash_password("brand-new-password"))  # what create_admin.py does
+    assert (await client.get("/api/me")).status_code == 401
+    r = await client.post("/api/login", json={"email": "admin@example.com", "password": "brand-new-password"})
+    assert r.status_code == 200 and (await client.get("/api/me")).status_code == 200
+
+
+async def test_logging_in_twice_gives_independent_sessions(env):
+    client, mon, script, db = env
+    await login(client)
+    other = await second_client(env)
+    await other.post("/api/login", json={"email": "admin@example.com", "password": "correct-horse"})
+    await client.post("/api/logout")
+    assert (await client.get("/api/me")).status_code == 401
+    assert (await other.get("/api/me")).status_code == 200  # plain logout only ends this session
+
+
+async def test_old_sessions_are_pruned_but_recent_ones_kept(env):
+    client, mon, script, db = env
+    await login(client)
+    await db.create_session("old-expired", "admin@example.com", datetime.now(timezone.utc) - timedelta(days=9), None, None)
+    await db.create_session("old-revoked", "admin@example.com", datetime.now(timezone.utc) + timedelta(days=1), None, None)
+    await db.pool.execute("UPDATE sessions SET revoked = TRUE, created_at = now() - interval '9 days' WHERE id = 'old-revoked'")
+    assert await db.prune_sessions() == 2
+    assert await db.pool.fetchval("SELECT count(*) FROM sessions") == 1  # the live login survives
+
+
+async def test_health_and_overview_report_pending_alerts(env):
+    client, mon, script, db = env
+    await login(client)
+    mon.alerts_pending = 3
+    assert (await client.get("/api/branches")).json()["alerts_pending"] == 3
+    assert (await client.get("/health")).json()["alerts_pending"] == 3
 
 
 # --- serving the built frontend ------------------------------------------------------------

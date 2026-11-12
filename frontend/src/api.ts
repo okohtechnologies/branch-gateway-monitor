@@ -69,6 +69,7 @@ export const api = {
   me: () => request<User>("GET", "/api/me"),
   login: (email: string, password: string) => request<User>("POST", "/api/login", { email, password }),
   logout: () => request<{ ok: boolean }>("POST", "/api/logout"),
+  logoutAll: () => request<{ ok: boolean; signed_out: number }>("POST", "/api/logout-all"),
   branches: () => request<BranchesResponse>("GET", "/api/branches"),
   branch: (id: number) => request<BranchDetail>("GET", `/api/branches/${id}`),
   checks: (id: number, range: Range) =>

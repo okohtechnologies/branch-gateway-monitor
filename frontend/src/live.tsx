@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { api } from "./api";
 import { useNow } from "./hooks";
 import { isStale } from "./logic";
 import type { LiveSnapshot, Status } from "./types";
@@ -19,6 +20,8 @@ interface LiveState {
   lastCycleAt: string | null;
   /** Observed seconds between probe cycles (null until two have arrived). */
   cycleIntervalS: number | null;
+  /** Alerts that could not be sent to Telegram and are waiting to be retried. */
+  alertsPending: number;
   /** The latest status change, phrased for a screen-reader live region. */
   announcement: Announcement | null;
 }
@@ -41,6 +44,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [cycleTick, setCycleTick] = useState(0);
   const [lastCycleAt, setLastCycleAt] = useState<string | null>(null);
   const [cycleIntervalS, setCycleIntervalS] = useState<number | null>(null);
+  const [alertsPending, setAlertsPending] = useState(0);
   const [announcement, setAnnouncement] = useState<Announcement | null>(null);
   const retry = useRef(0);
   const prevCycle = useRef<number | null>(null);
@@ -65,6 +69,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           for (const b of msg.branches as LiveSnapshot[]) next[b.branch_id] = b;
           setSnapshots(next);
           setMonitorSuspect(Boolean(msg.monitor_suspect));
+          setAlertsPending(Number(msg.alerts_pending ?? 0));
           setLastCycleAt(msg.ts);
           const ts = new Date(msg.ts).getTime();
           if (prevCycle.current !== null) {
@@ -79,10 +84,16 @@ export function LiveProvider({ children }: { children: ReactNode }) {
           setAnnouncement({ id: ++announceId.current, text: `${msg.name} ${SPOKEN[status] ?? status}` });
         }
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         setConnected(false);
         prevCycle.current = null;
         if (closed) return;
+        if (ev.code === 4401) {
+          // The server ended this session (signed out elsewhere, or a password reset).
+          // Asking who we are returns 401, which sends the user back to the login page.
+          api.me().catch(() => undefined);
+          return;
+        }
         // Exponential backoff, capped at 15s.
         const delay = Math.min(15000, 1000 * 2 ** retry.current++);
         timer = setTimeout(connect, delay);
@@ -98,8 +109,8 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ connected, snapshots, monitorSuspect, transitionTick, cycleTick, lastCycleAt, cycleIntervalS, announcement }),
-    [connected, snapshots, monitorSuspect, transitionTick, cycleTick, lastCycleAt, cycleIntervalS, announcement],
+    () => ({ connected, snapshots, monitorSuspect, transitionTick, cycleTick, lastCycleAt, cycleIntervalS, alertsPending, announcement }),
+    [connected, snapshots, monitorSuspect, transitionTick, cycleTick, lastCycleAt, cycleIntervalS, alertsPending, announcement],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

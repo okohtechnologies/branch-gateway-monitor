@@ -331,3 +331,150 @@ async def test_retention_zero_keeps_everything(db):
     await seed_checks(db, a, [400])
     assert await m.maybe_prune() == 0
     assert await db.pool.fetchval("select count(*) from checks") == 2
+
+
+# --- undelivered alerts are queued and retried -------------------------------------------------
+
+
+async def make_due(db):
+    await db.pool.execute("UPDATE notifications SET next_attempt_at = now() - interval '1 second' WHERE NOT success AND body IS NOT NULL")
+
+
+async def test_failed_alert_is_queued_with_its_text(setup):
+    m, n, script, db, a = setup
+    await cycles(m, 3)
+    n.ok = False
+    script.state[a] = DEAD
+    await cycles(m, 3)
+    row = await db.pool.fetchrow("SELECT success, body, buttons, attempts, next_attempt_at > now() AS later FROM notifications")
+    assert row["success"] is False and row["body"].startswith("🔴 DOWN: HQ")
+    assert row["buttons"] is not None and row["attempts"] == 0 and row["later"] is True
+    assert await db.pending_alert_count() == 1 and m.alerts_pending == 1
+
+
+async def test_retry_waits_until_due_then_delivers_marked_as_delayed(setup):
+    m, n, script, db, a = setup
+    await cycles(m, 3)
+    n.ok = False
+    script.state[a] = DEAD
+    await cycles(m, 3)
+    sent_before = len(n.sent)
+    n.ok = True
+    await cycles(m, 2)
+    assert len(n.sent) == sent_before  # not due yet: no early retry
+    await make_due(db)
+    await cycles(m, 1)
+    assert len(n.sent) == sent_before + 1
+    assert n.sent[-1].startswith("⏱ DELAYED ALERT") and "🔴 DOWN: HQ" in n.sent[-1]
+    row = await db.pool.fetchrow("SELECT success, delivered_at, error FROM notifications")
+    assert row["success"] is True and row["delivered_at"] is not None and row["error"] is None
+    assert await db.pending_alert_count() == 0 and m.alerts_pending == 0
+    await make_due(db)
+    await cycles(m, 2)
+    assert len(n.sent) == sent_before + 1  # delivered once, never again
+
+
+async def test_failed_retry_backs_off_and_stops_after_the_first_failure(setup):
+    m, n, script, db, a = setup
+    b = await db.upsert_branch("Depot", "10.0.0.2")
+    await cycles(m, 3)
+    n.ok = False
+    script.state.update({a: DEAD, b: DEAD})  # canary is fine, so two per-branch alerts, both failing
+    await cycles(m, 3)
+    assert await db.pending_alert_count() == 2
+    await make_due(db)
+    attempts_before = len(n.sent)
+    await cycles(m, 1)
+    assert len(n.sent) == attempts_before + 1  # one try, then it stops: the rest would fail too
+    rows = await db.pool.fetch("SELECT attempts, next_attempt_at > now() + interval '90 seconds' AS backed_off FROM notifications ORDER BY id")
+    assert [r["attempts"] for r in rows] == [1, 0]
+    assert rows[0]["backed_off"] is True  # next try is at least ~2 minutes away
+
+
+async def test_queued_alerts_arrive_in_their_original_order(setup):
+    m, n, script, db, a = setup
+    await cycles(m, 3)
+    n.ok = False
+    script.state[a] = DEAD
+    await cycles(m, 3)  # DOWN fails
+    script.state[a] = GOOD
+    await cycles(m, 3)  # RECOVERED fails
+    assert await db.pending_alert_count() == 2
+    n.ok = True
+    await make_due(db)
+    start = len(n.sent)
+    await cycles(m, 1)
+    delivered = n.sent[start:]
+    assert "DOWN: HQ" in delivered[0] and "RECOVERED: HQ" in delivered[1]
+
+
+async def test_alert_older_than_a_day_is_given_up(setup):
+    m, n, script, db, a = setup
+    await cycles(m, 3)
+    n.ok = False
+    script.state[a] = DEAD
+    await cycles(m, 3)
+    n.ok = True
+    await db.pool.execute("UPDATE notifications SET sent_at = now() - interval '25 hours'")
+    await make_due(db)
+    start = len(n.sent)
+    await cycles(m, 1)
+    assert len(n.sent) == start  # nothing sent: a day-old outage alert would only confuse
+    assert await db.pool.fetchval("SELECT gave_up FROM notifications") is True
+    assert await db.pending_alert_count() == 0
+
+
+async def test_reminders_and_muted_alerts_are_never_queued(setup):
+    m, n, script, db, a = setup
+    await go_down(m, script, a)
+    n.ok = False
+    await backdate(db, 31)
+    await cycles(m, 1)  # a reminder is due and fails
+    assert any(t.startswith("⏰") for t in n.sent)
+    assert await db.pending_alert_count() == 0  # the next reminder will follow anyway
+    b = await db.upsert_branch("Depot", "10.0.0.2")
+    await cycles(m, 3)
+    await db.mute_branch(b, 60)
+    script.state[b] = DEAD
+    await cycles(m, 3)
+    assert await db.pending_alert_count() == 0  # muted: suppressed, not queued
+
+
+async def test_buttons_kept_while_incident_is_open_and_dropped_after_it_closes(setup):
+    m, n, script, db, a = setup
+    await cycles(m, 3)
+    n.ok = False
+    script.state[a] = DEAD
+    await cycles(m, 3)
+    n.ok = True
+    await make_due(db)
+    await cycles(m, 1)  # incident still open
+    assert n.buttons[-1] is not None and n.buttons[-1][0][0][0] == "✅ Acknowledge"
+
+    n.ok = False
+    script.state[a] = GOOD
+    await cycles(m, 3)  # RECOVERED fails
+    n.ok = False
+    # queue another DOWN-style alert for the now-closed incident
+    iid = await db.pool.fetchval("SELECT id FROM incidents ORDER BY id DESC LIMIT 1")
+    await db.record_notification(iid, "DOWN", "telegram", False, "x", body="late", buttons=[[["✅ Acknowledge", f"ack:{iid}"]]])
+    n.ok = True
+    await make_due(db)
+    await cycles(m, 1)
+    late = [i for i, t in enumerate(n.sent) if "late" in t][-1]
+    assert n.buttons[late] is None  # incident closed: an Acknowledge button would be useless
+
+
+async def test_queue_survives_a_restart(setup):
+    m, n, script, db, a = setup
+    await cycles(m, 3)
+    n.ok = False
+    script.state[a] = DEAD
+    await cycles(m, 3)
+    n2 = FakeNotifier()
+    m2 = Monitor(db, n2, confirm=3, canary=CANARY, probe_fn=script)  # a fresh process
+    await m2.restore_state()
+    await make_due(db)
+    await cycles(m2, 1)
+    assert any(t.startswith("⏱ DELAYED ALERT") for t in n2.sent)
+    assert await db.pending_alert_count() == 0

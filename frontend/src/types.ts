@@ -31,6 +31,7 @@ export interface BranchesResponse {
   branches: Branch[];
   monitor_suspect: boolean;
   interval_s: number;
+  alerts_pending?: number;
 }
 
 export interface Incident {

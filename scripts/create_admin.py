@@ -24,7 +24,7 @@ async def main(email: str) -> int:
         await db.create_user(email, hash_password(pw))
     finally:
         await db.close()
-    print(f"Admin {email.lower()} is ready.")
+    print(f"Admin {email.lower()} is ready. Any existing sessions for this account were signed out.")
     return 0
 
 

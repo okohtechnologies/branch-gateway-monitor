@@ -40,8 +40,13 @@ BRANCHES = [
 
 
 class NullNotifier:
+    """Pretends to send. With --telegram-down it fails, to preview undelivered-alert handling."""
+
+    def __init__(self, ok: bool = True):
+        self.ok = ok
+
     async def send(self, text, buttons=None):
-        return True, None
+        return (True, None) if self.ok else (False, "demo: Telegram unreachable")
 
 
 async def seed(db: Database) -> dict[str, int]:
@@ -124,7 +129,7 @@ def make_probe(ids: dict[str, int]):
     return probe
 
 
-async def main(port: int) -> None:
+async def main(port: int, telegram_down: bool) -> None:
     real = Settings()  # only used to find your local database
     secret = secrets.token_urlsafe(48)
     settings = Settings(
@@ -138,8 +143,13 @@ async def main(port: int) -> None:
     db = await Database.connect(real.database_url, schema=SCHEMA)
     try:
         ids = await seed(db)
+        if telegram_down:  # two alerts that could not be delivered and are waiting to be retried
+            for kind, text in (("DOWN", "demo DOWN alert"), ("DEGRADED", "demo DEGRADED alert")):
+                await db.record_notification(None, kind, "telegram", False, "demo: Telegram unreachable", body=text)
+        import ipmon.api as api_module
+        api_module.WS_RECHECK_S = 2  # so a revoked session is noticed within seconds in the preview
         mon = Monitor(
-            db, NullNotifier(), interval=3, confirm=3, canary=Target(None, "1.1.1.1", "tcp", 443),
+            db, NullNotifier(ok=not telegram_down), interval=3, confirm=3, canary=Target(None, "1.1.1.1", "tcp", 443),
             probe_fn=make_probe(ids), reminder_minutes=None, retention_days=None,
         )
         for b in BRANCHES:  # healthy branches are already "confirmed up"; Lab Annex is not, so it stays Pending
@@ -159,4 +169,6 @@ async def main(port: int) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--port", type=int, default=8123)
-    asyncio.run(main(ap.parse_args().port))
+    ap.add_argument("--telegram-down", action="store_true", help="simulate undelivered Telegram alerts")
+    args = ap.parse_args()
+    asyncio.run(main(args.port, args.telegram_down))

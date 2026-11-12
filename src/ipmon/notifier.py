@@ -146,6 +146,11 @@ def format_reminder(name: str, host: str, severity: str, started_at: datetime, w
     )
 
 
+def format_delayed(body: str, original: datetime) -> str:
+    """An alert that could not be delivered at the time and is being re-sent now."""
+    return f"⏱ DELAYED ALERT (originally {_stamp(original)})\n{body}"
+
+
 def format_monitor_suspect(when: datetime) -> str:
     return (
         "⚠️ MONITOR MAY BE OFFLINE\n"

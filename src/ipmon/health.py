@@ -25,6 +25,7 @@ async def check_health(db: Database, monitor: Monitor, started_at: float) -> tup
 
     ok = db_ok and loop_ok
     return ok, {
+        "alerts_pending": monitor.alerts_pending,
         "status": "ok" if ok else "degraded",
         "db": db_ok,
         "probe_loop": {

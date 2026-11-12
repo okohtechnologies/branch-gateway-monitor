@@ -6,8 +6,10 @@ import ipaddress
 import logging
 import os
 import re
+import secrets
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -29,6 +31,8 @@ from .runner import Monitor
 log = logging.getLogger(__name__)
 
 RANGES = {"1h": 3600, "24h": 86400, "7d": 7 * 86400}
+# How often an otherwise idle live connection re-checks that its session was not revoked.
+WS_RECHECK_S = 30
 _HOSTNAME = re.compile(
     r"^(?=.{1,253}$)([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
 )
@@ -176,8 +180,19 @@ def create_app(
     if db is not None and monitor is not None and settings is not None:
         app.state.settings, app.state.db, app.state.monitor = settings, db, monitor
 
-    def current_user(request: Request) -> dict:
-        user = auth.read_token(request.app.state.settings.secret_key, request.cookies.get(auth.COOKIE))
+    async def session_user(cookies, app: FastAPI) -> dict | None:
+        """The signed-in user, but only if the cookie is genuine AND its server-side session is still active.
+
+        The server-side check is what makes logout, "sign out everywhere" and password resets real:
+        a copied cookie stops working the moment its session is revoked.
+        """
+        claims = auth.read_token(app.state.settings.secret_key, cookies.get(auth.COOKIE))
+        if claims and await app.state.db.session_active(claims["jti"]):
+            return claims
+        return None
+
+    async def current_user(request: Request) -> dict:
+        user = await session_user(request.cookies, request.app)
         if not user:
             raise HTTPException(401, "Not authenticated")
         return user
@@ -200,15 +215,29 @@ def create_app(
             raise HTTPException(401, "Invalid email or password")
         throttle.reset(ip)
         cfg = request.app.state.settings
-        token = auth.make_token(cfg.secret_key, row["email"], row["role"], cfg.session_hours)
+        sid = secrets.token_urlsafe(24)
+        expires = datetime.now(timezone.utc) + timedelta(hours=cfg.session_hours)
+        await request.app.state.db.create_session(sid, row["email"], expires, ip, request.headers.get("user-agent"))
+        token = auth.make_token(cfg.secret_key, row["email"], row["role"], cfg.session_hours, sid)
         response.set_cookie(auth.COOKIE, token, httponly=True, samesite="lax",
                             secure=cfg.cookie_secure, max_age=cfg.session_hours * 3600)
         return {"email": row["email"], "role": row["role"]}
 
     @app.post("/api/logout")
-    async def logout(response: Response):
+    async def logout(request: Request, response: Response):
+        """Ends THIS session on the server, not just the browser's copy of the cookie."""
+        claims = auth.read_token(request.app.state.settings.secret_key, request.cookies.get(auth.COOKIE))
+        if claims:
+            await request.app.state.db.revoke_session(claims["jti"])
         response.delete_cookie(auth.COOKIE)
         return {"ok": True}
+
+    @app.post("/api/logout-all")
+    async def logout_all(request: Request, response: Response, user: dict = Depends(current_user)):
+        """Signs the user out of every device, including this one."""
+        ended = await request.app.state.db.revoke_user_sessions(user["sub"])
+        response.delete_cookie(auth.COOKIE)
+        return {"ok": True, "signed_out": ended}
 
     @app.get("/api/me")
     async def me(user: dict = Depends(current_user)):
@@ -229,7 +258,7 @@ def create_app(
                 "incident_id": r["incident_id"], "incident_started_at": r["incident_started_at"],
                 "acknowledged_by": r["acknowledged_by"],
             }))
-        return {"branches": out, "monitor_suspect": mon.engine.monitor_suspect, "interval_s": mon.interval}
+        return {"branches": out, "monitor_suspect": mon.engine.monitor_suspect, "interval_s": mon.interval, "alerts_pending": mon.alerts_pending}
 
     @app.post("/api/branches", status_code=201)
     async def create_branch(body: BranchIn, request: Request, _: dict = Depends(current_user)):
@@ -300,8 +329,7 @@ def create_app(
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
-        cfg = websocket.app.state.settings
-        if not auth.read_token(cfg.secret_key, websocket.cookies.get(auth.COOKIE)):
+        if not await session_user(websocket.cookies, websocket.app):
             await websocket.close(code=4401)
             return
         await websocket.accept()
@@ -312,13 +340,19 @@ def create_app(
             while True:
                 get = asyncio.create_task(q.get())
                 recv = asyncio.create_task(websocket.receive_text())
-                done, pending = await asyncio.wait({get, recv}, return_when=asyncio.FIRST_COMPLETED)
+                done, pending = await asyncio.wait(
+                    {get, recv}, return_when=asyncio.FIRST_COMPLETED, timeout=WS_RECHECK_S
+                )
                 for t in pending:
                     t.cancel()
+                if get in done:
+                    await websocket.send_json(get.result())
                 if recv in done:
                     recv.result()  # raises WebSocketDisconnect when the client leaves
-                    continue
-                await websocket.send_json(get.result())
+                if not done and not await session_user(websocket.cookies, websocket.app):
+                    # Quiet for a while: make sure the session was not revoked meanwhile.
+                    await websocket.close(code=4401)
+                    return
         except WebSocketDisconnect:
             pass
         finally:

@@ -1,6 +1,7 @@
 """PostgreSQL storage (asyncpg)."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from importlib import resources
 
@@ -127,14 +128,65 @@ class Database:
         success: bool,
         error: str | None = None,
         suppressed: bool = False,
+        body: str | None = None,
+        buttons: list | None = None,
     ) -> None:
+        """Log a notification. A failed one that carries its ``body`` is queued for retry in a minute."""
+        retry = (not success) and (not suppressed) and body is not None
         await self.pool.execute(
             """
-            INSERT INTO notifications (incident_id, kind, channel, success, error, suppressed)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO notifications (incident_id, kind, channel, success, error, suppressed,
+                                       body, buttons, next_attempt_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb,
+                    CASE WHEN $9 THEN now() + interval '1 minute' END)
             """,
             incident_id, kind, channel, success, error, suppressed,
+            body, json.dumps(buttons) if buttons is not None else None, retry,
         )
+
+    # --- delivery retries -------------------------------------------------------------
+
+    async def due_notification_retries(self, limit: int = 10) -> list[asyncpg.Record]:
+        """Undelivered alerts whose retry time has come, oldest first (so order is preserved)."""
+        return await self.pool.fetch(
+            """
+            SELECT id, incident_id, kind, body, buttons, attempts, sent_at
+            FROM notifications
+            WHERE NOT success AND NOT suppressed AND NOT gave_up AND body IS NOT NULL
+              AND next_attempt_at <= now()
+            ORDER BY id LIMIT $1
+            """,
+            limit,
+        )
+
+    async def mark_notification_delivered(self, notification_id: int) -> None:
+        await self.pool.execute(
+            "UPDATE notifications SET success = TRUE, error = NULL, delivered_at = now(), "
+            "attempts = attempts + 1, next_attempt_at = NULL WHERE id = $1",
+            notification_id,
+        )
+
+    async def reschedule_notification(self, notification_id: int, delay_s: int, error: str | None) -> None:
+        await self.pool.execute(
+            "UPDATE notifications SET attempts = attempts + 1, error = $3, "
+            "next_attempt_at = now() + make_interval(secs => $2) WHERE id = $1",
+            notification_id, float(delay_s), error,
+        )
+
+    async def give_up_notification(self, notification_id: int) -> None:
+        await self.pool.execute(
+            "UPDATE notifications SET gave_up = TRUE, next_attempt_at = NULL WHERE id = $1", notification_id
+        )
+
+    async def pending_alert_count(self) -> int:
+        """Alerts waiting to be re-sent (shown as a warning in the dashboard)."""
+        return await self.pool.fetchval(
+            "SELECT count(*) FROM notifications "
+            "WHERE NOT success AND NOT suppressed AND NOT gave_up AND body IS NOT NULL"
+        )
+
+    async def incident_is_open(self, incident_id: int) -> bool:
+        return bool(await self.pool.fetchval("SELECT ended_at IS NULL FROM incidents WHERE id = $1", incident_id))
 
     # --- retention ---------------------------------------------------------------------
 
@@ -272,13 +324,47 @@ class Database:
     # --- users ----------------------------------------------------------------
 
     async def create_user(self, email: str, password_hash: str, role: str = "admin") -> int:
-        return await self.pool.fetchval(
+        """Create a user, or reset an existing one's password. A reset signs out every device."""
+        uid = await self.pool.fetchval(
             """
             INSERT INTO users (email, password_hash, role) VALUES ($1, $2, $3)
             ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash
             RETURNING id
             """,
             email.lower(), password_hash, role,
+        )
+        await self.revoke_user_sessions(email)
+        return uid
+
+    # --- sessions -------------------------------------------------------------------------
+
+    async def create_session(self, sid: str, email: str, expires_at: datetime, ip: str | None, user_agent: str | None) -> None:
+        await self.pool.execute(
+            "INSERT INTO sessions (id, email, expires_at, ip, user_agent) VALUES ($1, $2, $3, $4, $5)",
+            sid, email.lower(), expires_at, ip, (user_agent or "")[:200] or None,
+        )
+
+    async def session_active(self, sid: str) -> bool:
+        return bool(await self.pool.fetchval(
+            "SELECT 1 FROM sessions WHERE id = $1 AND NOT revoked AND expires_at > now()", sid
+        ))
+
+    async def revoke_session(self, sid: str) -> None:
+        await self.pool.execute("UPDATE sessions SET revoked = TRUE WHERE id = $1", sid)
+
+    async def revoke_user_sessions(self, email: str) -> int:
+        """Sign a user out everywhere. Returns how many live sessions were ended."""
+        return await self.pool.fetchval(
+            "WITH r AS (UPDATE sessions SET revoked = TRUE WHERE email = $1 AND NOT revoked RETURNING 1) "
+            "SELECT count(*) FROM r",
+            email.lower(),
+        )
+
+    async def prune_sessions(self) -> int:
+        """Forget sessions that expired or were revoked more than a week ago."""
+        return await self.pool.fetchval(
+            "WITH d AS (DELETE FROM sessions WHERE expires_at < now() - interval '7 days' "
+            "OR (revoked AND created_at < now() - interval '7 days') RETURNING 1) SELECT count(*) FROM d"
         )
 
     async def get_user(self, email: str) -> asyncpg.Record | None:
