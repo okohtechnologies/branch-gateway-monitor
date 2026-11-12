@@ -20,6 +20,14 @@ network or VPN) and **reach the internet** (Telegram, the heartbeat service).
 Run `python spike/spike.py --gateway <ip>` on the intended host first. It checks ICMP to a
 gateway, Telegram reachability and, optionally, a test message and a heartbeat ping.
 
+## Setting up a dedicated Windows host
+
+Moving this to a machine that runs around the clock? Follow
+[docs/host-setup-windows.md](docs/host-setup-windows.md): installing the tools, keeping the machine
+awake, recovering from reboots, and proving it works. Two helper scripts do the error-prone parts:
+`scripts\host_check.ps1` (a read-only pre-flight check) and `scripts\init_env.ps1` (creates `.env` with
+generated secrets and checked input).
+
 ## Quick start (Docker Compose)
 
 Requires Docker with Compose v2.
