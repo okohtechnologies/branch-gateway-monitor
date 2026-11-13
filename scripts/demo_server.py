@@ -47,7 +47,7 @@ class DemoApi:
 
     async def call(self, method, payload, **kw):
         if self.ok:
-            return True, {"username": "demo_branch_bot", "first_name": "Branch Monitor (demo)"}, None
+            return True, {"username": "demo_branch_bot", "first_name": "OTech NetWatch (demo)"}, None
         return False, None, "network error: ConnectError"
 
 

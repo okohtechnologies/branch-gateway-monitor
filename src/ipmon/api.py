@@ -498,7 +498,7 @@ def create_app(
             raise HTTPException(429, "Wait a few seconds before sending another test.", headers={"Retry-After": "5"})
         test_state["at"] = now
         ok, err = await request.app.state.monitor.notifier.send(
-            "\u2705 Test message from Branch Monitor. If you can read this, alerts will reach you."
+            "\u2705 Test message from OTech NetWatch. If you can read this, alerts will reach you."
         )
         await request.app.state.db.record_notification(None, "TEST", "telegram", ok, err)
         return {"ok": ok, "error": err}

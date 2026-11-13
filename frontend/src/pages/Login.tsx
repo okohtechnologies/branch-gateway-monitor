@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Activity, Eye, EyeOff, RefreshCw } from "lucide-react";
+import { Credit } from "../components/Credit";
+import { Eye, EyeOff, RefreshCw } from "lucide-react";
 import { useAuth } from "../auth";
 import { ApiError } from "../api";
 import { useNow } from "../hooks";
@@ -54,11 +55,11 @@ export function Login() {
   };
 
   return (
-    <main className="flex min-h-dvh items-center justify-center px-4 py-8">
+    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 px-4 py-8">
       <form onSubmit={submit} className="card w-full max-w-sm p-6 shadow-xl sm:p-7">
         <div className="mb-5 flex items-center gap-2.5">
-          <Activity className="size-6 text-accent" aria-hidden />
-          <h1 className="text-xl font-semibold tracking-tight">Branch Monitor</h1>
+          <img src="/logo.png" alt="" className="size-11" />
+          <h1 className="flex flex-col leading-none"><span className="text-xs font-extrabold tracking-[0.22em]">OTECH</span><span className="text-2xl font-bold tracking-tight">Net<span className="text-accent">Watch</span></span></h1>
         </div>
         <p className="mb-5 text-sm text-muted">Sign in to see the status of your branches.</p>
 
@@ -111,6 +112,7 @@ export function Login() {
           </button>
         )}
       </form>
+      <Credit />
     </main>
   );
 }

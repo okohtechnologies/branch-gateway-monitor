@@ -18,6 +18,7 @@ import {
   type Draft,
 } from "../logic";
 import { useToast } from "../toast";
+import { Credit } from "../components/Credit";
 import { Field } from "../components/Field";
 import { ErrorState } from "../components/States";
 import type { MonitorStatus, SettingValue, SettingsData, TelegramStatus } from "../types";
@@ -29,6 +30,7 @@ const SECTIONS = [
   { id: "telegram", label: "Telegram" },
   { id: "health", label: "Monitor health" },
   { id: "account", label: "Account" },
+  { id: "about", label: "About" },
 ];
 
 export function Settings() {
@@ -82,6 +84,16 @@ export function Settings() {
           <TelegramSection />
           <HealthSection />
           <AccountSection />
+          <Card id="about" title="About">
+            <div className="flex items-center gap-3">
+              <img src="/logo.png" alt="" className="size-12" />
+              <div>
+                <p className="font-semibold">OTech <span className="text-accent">NetWatch</span></p>
+                <p className="text-sm text-muted">Network intelligence. Total visibility.</p>
+                <Credit className="mt-1" />
+              </div>
+            </div>
+          </Card>
         </div>
       </div>
     </div>
