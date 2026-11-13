@@ -1,27 +1,13 @@
 import { useEffect, useState } from "react";
 
-const SEEN = "splash-seen";
 const SHOW_MS = 2200;
 
-function alreadySeen() {
-  try {
-    return sessionStorage.getItem(SEEN) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** Branded start screen: shown once per browser session, skippable by click or key, fades into the app. */
+/** Branded start screen: shown on every load, skippable by click or key, fades into the app. */
 export function Splash() {
-  const [phase, setPhase] = useState<"show" | "leaving" | "gone">(alreadySeen() ? "gone" : "show");
+  const [phase, setPhase] = useState<"show" | "leaving" | "gone">("show");
 
   useEffect(() => {
     if (phase !== "show") return;
-    try {
-      sessionStorage.setItem(SEEN, "1");
-    } catch {
-      /* private mode: it simply shows again next time */
-    }
     const leave = () => setPhase("leaving");
     const t = window.setTimeout(leave, SHOW_MS);
     window.addEventListener("keydown", leave);
