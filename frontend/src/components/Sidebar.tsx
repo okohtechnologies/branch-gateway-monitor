@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { Activity, LogOut, Moon, PanelLeftClose, PanelLeftOpen, ShieldOff, Sun } from "lucide-react";
+import { Credit } from "./Credit";
+import { LogOut, Moon, PanelLeftClose, PanelLeftOpen, ShieldOff, Sun } from "lucide-react";
 import { useAuth } from "../auth";
 import { useTheme } from "../theme";
 import { NAV, navActive, SignOutEverywhereDialog, useLiveState, WarningDot } from "./chrome";
@@ -92,9 +93,9 @@ export function Sidebar({ pinned, onTogglePin }: { pinned: boolean; onTogglePin:
         <div className="mb-2 flex h-11 items-center">
           <span className={`${ROW} w-auto min-w-0 flex-1 font-semibold tracking-tight`}>
             <Icon>
-              <Activity className="size-5 text-accent" aria-hidden />
+              <img src="/logo.png" alt="" className="size-7" />
             </Icon>
-            <Label show={expanded}>Branch Monitor</Label>
+            <Label show={expanded}><span className="flex flex-col leading-none"><span className="text-[0.6rem] font-extrabold tracking-[0.2em]">OTECH</span><span className="font-bold">Net<span className="text-accent">Watch</span></span></span></Label>
           </span>
           <button
             onClick={onTogglePin}
@@ -157,6 +158,7 @@ export function Sidebar({ pinned, onTogglePin }: { pinned: boolean; onTogglePin:
             </Icon>
             <Label show={expanded}>Sign out of all devices</Label>
           </button>
+          <Label show={expanded} className="block px-2.5 pt-1 pb-0.5 whitespace-nowrap"><Credit /></Label>
         </div>
       </aside>
       {confirmAll && <SignOutEverywhereDialog onClose={() => setConfirmAll(false)} />}

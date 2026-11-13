@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { Activity, LogOut, Moon, ShieldOff, Sun } from "lucide-react";
+import { LogOut, Moon, ShieldOff, Sun } from "lucide-react";
 import { useAuth } from "../auth";
 import { useMediaQuery, useStoredChoice } from "../hooks";
 import { useLive } from "../live";
@@ -25,7 +25,7 @@ export function Layout() {
 
   // Problems show in the browser tab, so they are visible from another window too.
   useEffect(() => {
-    document.title = down ? `(${down} down) Branch Monitor` : degraded ? `(${degraded} degraded) Branch Monitor` : "Branch Monitor";
+    document.title = down ? `(${down} down) OTech NetWatch` : degraded ? `(${degraded} degraded) OTech NetWatch` : "OTech NetWatch";
   }, [down, degraded]);
 
   return (
@@ -82,8 +82,9 @@ function MobileHeader() {
     <header className="sticky top-0 z-40 border-b border-line bg-card/95 backdrop-blur md:hidden">
       <div className="flex h-14 items-center gap-2 px-4">
         <Link to="/" className="mr-auto flex min-h-11 items-center gap-2 rounded-lg font-semibold tracking-tight">
-          <Activity className="size-5 text-accent" aria-hidden />
-          Branch Monitor
+          <img src="/logo.png" alt="" className="size-8" />
+          <span className="sr-only">OTech NetWatch</span>
+          <span aria-hidden className="flex flex-col leading-none"><span className="text-[0.6rem] font-extrabold tracking-[0.2em]">OTECH</span><span className="font-bold">Net<span className="text-accent">Watch</span></span></span>
         </Link>
         <span role="status">
           {live && (

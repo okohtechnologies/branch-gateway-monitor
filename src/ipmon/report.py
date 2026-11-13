@@ -107,6 +107,9 @@ def _line(b: BranchReport) -> str:
     return f"{emoji} {b.name}: " + " · ".join(parts)
 
 
+FOOTER = "\n\n— OTech NetWatch · Made by Okoh Technologies"
+
+
 def format_report(r: Report, tz: tzinfo | None = None) -> str:
     fmt = "%a %d %b"
     head = f"📊 Weekly report\n{r.start.astimezone(tz):{fmt}} – {r.end.astimezone(tz):{fmt}}"

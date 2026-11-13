@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AuthProvider, useAuth } from "./auth";
 import { LiveProvider } from "./live";
 import { ToastProvider } from "./toast";
+import { Splash } from "./components/Splash";
 import { Layout } from "./components/Layout";
 import { Login } from "./pages/Login";
 import { Overview } from "./pages/Overview";
@@ -48,6 +49,7 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
+          <Splash />
           <Gate />
         </ToastProvider>
       </AuthProvider>
