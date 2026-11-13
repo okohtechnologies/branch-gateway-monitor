@@ -528,5 +528,49 @@ class Database:
         return await self.pool.fetchval("SELECT max(sent_at) FROM notifications WHERE kind = $1", kind)
 
 
+    # --- ip scanner: remembered devices ---------------------------------------------
+
+    async def known_hosts(self, ips: list[str]) -> dict[str, asyncpg.Record]:
+        rows = await self.pool.fetch("SELECT * FROM known_hosts WHERE ip = ANY($1::text[])", ips)
+        return {r["ip"]: r for r in rows}
+
+    async def save_seen(self, hosts: list[tuple]) -> None:
+        """Remember devices that answered: (ip, mac, hostname, vendor) each.
+
+        Missing details never erase known ones, unless the MAC changed: then a different device now
+        holds the address and the old name and maker no longer apply.
+        """
+        await self.pool.executemany(
+            """
+            INSERT INTO known_hosts (ip, mac, hostname, vendor, first_seen, last_seen)
+            VALUES ($1, $2, $3, $4, now(), now())
+            ON CONFLICT (ip) DO UPDATE SET
+                hostname = CASE WHEN known_hosts.mac IS NOT NULL AND EXCLUDED.mac IS NOT NULL
+                                     AND known_hosts.mac <> EXCLUDED.mac
+                                THEN EXCLUDED.hostname ELSE COALESCE(EXCLUDED.hostname, known_hosts.hostname) END,
+                vendor   = CASE WHEN known_hosts.mac IS NOT NULL AND EXCLUDED.mac IS NOT NULL
+                                     AND known_hosts.mac <> EXCLUDED.mac
+                                THEN EXCLUDED.vendor ELSE COALESCE(EXCLUDED.vendor, known_hosts.vendor) END,
+                mac      = COALESCE(EXCLUDED.mac, known_hosts.mac),
+                first_seen = COALESCE(known_hosts.first_seen, EXCLUDED.first_seen),
+                last_seen  = now()
+            """,
+            hosts,
+        )
+
+    async def set_host_label(self, ip: str, label: str) -> None:
+        """Name an address. An address that was never seen becomes 'assigned' (offline) this way."""
+        await self.pool.execute(
+            """
+            INSERT INTO known_hosts (ip, label) VALUES ($1, $2)
+            ON CONFLICT (ip) DO UPDATE SET label = EXCLUDED.label
+            """,
+            ip, label,
+        )
+
+    async def forget_host(self, ip: str) -> bool:
+        return (await self.pool.execute("DELETE FROM known_hosts WHERE ip = $1", ip)) != "DELETE 0"
+
+
 class DuplicateName(Exception):
     """A branch with this name already exists."""

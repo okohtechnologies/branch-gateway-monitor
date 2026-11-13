@@ -1,5 +1,5 @@
 /** Pure helpers behind the screens. No React, no I/O: everything here is unit-tested. */
-import type { Branch, BranchInput, Incident, Point, ScanHost, SettingLimit, SettingValue, SparkPoint, Status } from "./types";
+import type { Branch, BranchInput, HostState, Incident, Point, ScanHost, SettingLimit, SettingValue, SparkPoint, Status } from "./types";
 
 export type StatusFilter = "all" | "down" | "degraded" | "up" | "pending" | "disabled";
 export const STATUS_FILTERS: readonly StatusFilter[] = ["all", "down", "degraded", "up", "pending", "disabled"];
@@ -369,13 +369,37 @@ export function ipToNumber(ip: string): number {
   return ip.split(".").reduce((n, part) => n * 256 + (Number(part) || 0), 0);
 }
 
-export type ScanFilter = "all" | "used" | "free";
+export type ScanFilter = "all" | HostState;
 
-/** Rows matching the filter and search text (IP, hostname or MAC), in IP order. */
+/** The name to show for a host: the one someone gave it, else what the network calls it. */
+export const hostName = (h: ScanHost): string | null => h.label ?? h.hostname;
+
+/** Rows matching the filter and search text (IP, name, MAC or maker), in IP order. */
 export function filterScan(rows: ScanHost[], filter: ScanFilter, query: string): ScanHost[] {
   const q = query.trim().toLowerCase();
+  const has = (v: string | null) => (v ?? "").toLowerCase().includes(q);
   return rows
     .filter((r) => filter === "all" || r.status === filter)
-    .filter((r) => !q || r.ip.includes(q) || (r.hostname ?? "").toLowerCase().includes(q) || (r.mac ?? "").toLowerCase().includes(q) || (r.vendor ?? "").toLowerCase().includes(q))
+    .filter((r) => !q || r.ip.includes(q) || has(r.label) || has(r.hostname) || has(r.mac) || has(r.vendor))
     .sort((a, b) => ipToNumber(a.ip) - ipToNumber(b.ip));
+}
+
+export function countScan(rows: ScanHost[]): Record<HostState, number> {
+  const out: Record<HostState, number> = { online: 0, offline: 0, free: 0 };
+  for (const r of rows) out[r.status]++;
+  return out;
+}
+
+/** After naming an address: a free one becomes assigned (offline), since someone now knows what it is. */
+export function withLabel(rows: ScanHost[], ip: string, label: string): ScanHost[] {
+  return rows.map((r) => (r.ip === ip ? { ...r, label, known: true, status: r.status === "free" ? "offline" : r.status } : r));
+}
+
+/** After forgetting an address: an offline one reads as free again; an online one just loses its name. */
+export function withoutMemory(rows: ScanHost[], ip: string): ScanHost[] {
+  return rows.map((r) => {
+    if (r.ip !== ip) return r;
+    const cleared = { ...r, label: null, known: false, last_seen: null };
+    return r.status === "offline" ? { ...cleared, status: "free" as const, hostname: null, mac: null, vendor: null, mac_private: false } : cleared;
+  });
 }

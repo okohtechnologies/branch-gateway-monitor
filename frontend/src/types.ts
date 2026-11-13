@@ -120,9 +120,12 @@ export interface TelegramStatus {
   last_error_at: string | null;
 }
 
+export type HostState = "online" | "offline" | "free";
+
 export interface ScanHost {
   ip: string;
-  status: "used" | "free";
+  /** online: answered now. offline: did not answer but is known (seen before, or marked assigned). free: never seen. */
+  status: HostState;
   latency_ms: number | null;
   ports: number[];
   hostname: string | null;
@@ -131,19 +134,32 @@ export interface ScanHost {
   vendor: string | null;
   /** A randomized "private" MAC, as phones and many laptops use. */
   mac_private: boolean;
+  /** How an online host was found: its replies, or only its ARP answer (it ignores pings). */
+  via: "reply" | "arp" | null;
+  /** A name someone gave this address. */
+  label: string | null;
+  /** Something is remembered about this address. */
+  known: boolean;
+  last_seen: string | null;
 }
 
 export interface ScanView {
   id: string;
   target: string;
   state: "running" | "done" | "cancelled" | "failed";
+  /** While running: scanning addresses, then naming (waiting for device name lookups, which can be slow). */
+  phase: "scanning" | "naming";
   error: string | null;
   total: number;
   done: number;
-  used: number;
+  online: number;
+  offline: number;
   free: number;
   elapsed_s: number;
   /** Pass back as `since` to receive only rows added after this one. */
   next: number;
+  /** Pass back as `version`: if it changed, the rows were revised and `reset` says to replace them all. */
+  version: number;
+  reset: boolean;
   results: ScanHost[];
 }

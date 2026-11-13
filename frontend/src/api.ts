@@ -85,7 +85,10 @@ export const api = {
   updateBranch: (id: number, b: BranchInput) => request<Branch>("PUT", `/api/branches/${id}`, b),
   deleteBranch: (id: number) => request<void>("DELETE", `/api/branches/${id}`),
   startScan: (target: string) => request<ScanView>("POST", "/api/scans", { target }),
-  scan: (id: string, since: number) => request<ScanView>("GET", `/api/scans/${id}?since=${since}`),
+  scan: (id: string, since: number, version: number) =>
+    request<ScanView>("GET", `/api/scans/${id}?since=${since}&version=${version}`),
+  nameHost: (ip: string, label: string) => request<{ ip: string; label: string }>("PUT", `/api/scanner/hosts/${ip}`, { label }),
+  forgetHost: (ip: string) => request<void>("DELETE", `/api/scanner/hosts/${ip}`),
   cancelScan: (id: string) => request<{ cancelled: boolean }>("POST", `/api/scans/${id}/cancel`),
   settings: () => request<SettingsData>("GET", "/api/settings"),
   /** A value of null resets that setting to its default. */

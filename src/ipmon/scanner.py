@@ -1,10 +1,11 @@
 """Active IP scanner: find which addresses on a network answer, and which do not.
 
-A host counts as *used* if it answers an ICMP echo OR a TCP connect (an actively refused
-connection also proves a host is there). A host that stays silent is reported as *free*, but
-that is a best guess: a firewalled or powered-off machine looks the same.
+A host is *online* if it answers an ICMP echo, a TCP connect (an actively refused connection also
+proves a host is there) or, on our own subnet, ARP. A silent host is *offline* if we know it (it
+answered an earlier scan, or someone marked it as assigned) and *free* if we have never seen it.
+"Free" is still only "as far as we know": a silent address on its own proves nothing.
 
-Scans are one-off jobs held in memory; nothing is stored in the database.
+Scans run as in-memory jobs; the devices they find are remembered in the database.
 """
 from __future__ import annotations
 
@@ -15,8 +16,12 @@ import logging
 import re
 import secrets
 import shutil
+import socket
+import struct
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -80,18 +85,27 @@ def parse_target(text: str) -> list[ipaddress.IPv4Address]:
 @dataclass
 class HostResult:
     ip: str
-    status: str  # "used" | "free"
+    # "online"  answered now
+    # "offline" did not answer, but is known (seen before or marked as assigned): in use, just not on
+    # "free"    did not answer and has never been seen
+    status: str
     latency_ms: float | None = None
     ports: list[int] = field(default_factory=list)
     hostname: str | None = None
     mac: str | None = None
     vendor: str | None = None
     mac_private: bool = False  # randomized "private" MAC (phones, modern laptops): no maker to look up
+    via: str | None = None  # how an online host was found: "reply" (ping/port) or "arp" (only its ARP answer)
+    label: str | None = None  # a name someone gave this address
+    known: bool = False  # there is a saved record for this address
+    last_seen: datetime | None = None
 
     def as_dict(self) -> dict:
         return {"ip": self.ip, "status": self.status, "latency_ms": self.latency_ms,
                 "ports": self.ports, "hostname": self.hostname, "mac": self.mac,
-                "vendor": self.vendor, "mac_private": self.mac_private}
+                "vendor": self.vendor, "mac_private": self.mac_private, "via": self.via,
+                "label": self.label, "known": self.known,
+                "last_seen": self.last_seen.isoformat() if self.last_seen else None}
 
 
 # --- probing -------------------------------------------------------------------
@@ -99,7 +113,8 @@ class HostResult:
 
 async def _icmp(ip: str, timeout: float) -> float | None:
     try:
-        r = await async_ping(ip, count=1, timeout=timeout, privileged=False)
+        # Two echo requests: on a slow or lossy link a single dropped packet would make a live host look silent.
+        r = await async_ping(ip, count=2, interval=0.2, timeout=timeout, privileged=False)
     except (ICMPLibError, OSError):
         return None
     return round(r.avg_rtt, 2) if r.packets_received else None
@@ -132,21 +147,73 @@ async def probe_host(ip: str, ports: tuple[int, ...], timeout: float = PROBE_TIM
         return HostResult(ip, "free")
     open_ports = sorted(p for p, (_, is_open) in zip(ports, tcp) if is_open)
     answered = latency is not None or any(a for a, _ in tcp)
-    return HostResult(ip, "used" if answered else "free", latency, open_ports)
+    return HostResult(ip, "online" if answered else "free", latency, open_ports, via="reply" if answered else None)
 
 
-async def resolve_name(ip: str, timeout: float = 1.5) -> str | None:
+# --- names ---------------------------------------------------------------------
+# Two sources, asked together: the network's reverse DNS (fuller names, but Windows can take 10s+ to
+# answer or give up) and NetBIOS (Windows PCs, printers and NAS boxes answer directly in about a second,
+# though names are cut to 15 characters). DNS wins when it has an answer.
+
+DNS_TIMEOUT_S = 12.0
+NETBIOS_TIMEOUT_S = 1.0
+# Its own pool: a lookup that is stuck waiting for DNS must not starve anything else.
+_dns_pool = ThreadPoolExecutor(max_workers=64, thread_name_prefix="rdns")
+
+# NetBIOS node status request for the wildcard name "*" (RFC 1002).
+_NBSTAT = struct.pack(">HHHHHH", 0x4950, 0, 1, 0, 0, 0) + b"\x20" + b"CK" + b"AA" * 15 + b"\x00" + struct.pack(">HH", 0x21, 1)
+
+
+def parse_nbstat(data: bytes) -> str | None:
+    """The computer name from a NetBIOS node status reply (its unique name with suffix 0x00), or None."""
     try:
-        name, _, _ = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(None, _gethostbyaddr, ip), timeout)
+        pos = 12  # header
+        if data[pos] & 0xC0 == 0xC0:
+            pos += 2
+        else:
+            while data[pos]:
+                pos += data[pos] + 1
+            pos += 1
+        pos += 2 + 2 + 4 + 2  # type, class, ttl, data length
+        count = data[pos]
+        pos += 1
+        for _ in range(count):
+            name = data[pos:pos + 15].decode("ascii", "replace").strip()
+            suffix = data[pos + 15]
+            (flags,) = struct.unpack(">H", data[pos + 16:pos + 18])
+            pos += 18
+            if suffix == 0 and not flags & 0x8000 and name:  # 0x8000 marks a group (workgroup) name
+                return name
+    except (IndexError, struct.error):
+        pass
+    return None
+
+
+async def netbios_name(ip: str, timeout: float = NETBIOS_TIMEOUT_S) -> str | None:
+    loop = asyncio.get_running_loop()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setblocking(False)
+    try:
+        await loop.sock_sendto(sock, _NBSTAT, (ip, 137))
+        data, _ = await asyncio.wait_for(loop.sock_recvfrom(sock, 2048), timeout)
+    except (OSError, asyncio.TimeoutError):
+        return None
+    finally:
+        sock.close()
+    return parse_nbstat(data)
+
+
+async def dns_name(ip: str, timeout: float = DNS_TIMEOUT_S) -> str | None:
+    try:
+        name, _, _ = await asyncio.wait_for(asyncio.get_running_loop().run_in_executor(_dns_pool, socket.gethostbyaddr, ip), timeout)
     except (OSError, asyncio.TimeoutError):
         return None
     return name
 
 
-def _gethostbyaddr(ip: str):
-    import socket
-
-    return socket.gethostbyaddr(ip)
+async def resolve_name(ip: str) -> str | None:
+    dns, netbios = await asyncio.gather(dns_name(ip), netbios_name(ip))
+    return dns or netbios
 
 
 _ARP_LINE = re.compile(r"(\d{1,3}(?:\.\d{1,3}){3})\)?\s+(?:at\s+)?([0-9a-fA-F]{2}(?:[-:][0-9a-fA-F]{2}){5})")
@@ -232,18 +299,24 @@ class Scan:
     total: int
     started_at: float
     state: str = "running"  # running | done | cancelled | failed
+    phase: str = "scanning"  # while running: "scanning" addresses, then "naming" (waiting for name lookups)
     done: int = 0
     finished_at: float | None = None
     error: str | None = None
     results: list[HostResult] = field(default_factory=list)
+    # Rows are only appended while the scan runs; at the end some may change (ARP finds devices that
+    # ignore pings). Bumping `version` tells a polling client to discard what it has and re-read everything.
+    version: int = 0
 
-    def view(self, since: int = 0) -> dict:
-        since = max(0, since)
-        used = sum(1 for r in self.results if r.status == "used")
+    def view(self, since: int = 0, version: int | None = None) -> dict:
+        reset = version is not None and version != self.version
+        since = 0 if reset else max(0, since)
+        counts = {s: sum(1 for r in self.results if r.status == s) for s in ("online", "offline", "free")}
         return {
-            "id": self.id, "target": self.target, "state": self.state, "error": self.error,
-            "total": self.total, "done": self.done, "used": used, "free": self.done - used,
+            "id": self.id, "target": self.target, "state": self.state, "phase": self.phase, "error": self.error,
+            "total": self.total, "done": self.done, **counts,
             "elapsed_s": round((self.finished_at or time.monotonic()) - self.started_at, 1),
+            "version": self.version, "reset": reset,
             "next": len(self.results), "results": [r.as_dict() for r in self.results[since:]],
         }
 
@@ -253,11 +326,12 @@ class Busy(Exception):
 
 
 class ScanManager:
-    def __init__(self, probe_fn: ProbeFn | None = None, resolve_fn=None, arp_fn=None, concurrency: int = CONCURRENCY):
+    def __init__(self, probe_fn: ProbeFn | None = None, resolve_fn=None, arp_fn=None, concurrency: int = CONCURRENCY, db=None):
         self._probe = probe_fn or probe_host
         self._resolve = resolve_fn or resolve_name
         self._arp = arp_fn or read_arp
         self._concurrency = concurrency
+        self.db = db  # remembers devices between scans; without one every scan starts from nothing
         self._scans: dict[str, Scan] = {}
         self._tasks: dict[str, asyncio.Task] = {}
 
@@ -303,26 +377,91 @@ class ScanManager:
 
     async def _run(self, scan: Scan, hosts: list[str], ports: tuple[int, ...]) -> None:
         sem = asyncio.Semaphore(self._concurrency)
+        known = await self._load_known(hosts)
+        lookups: dict[str, asyncio.Task] = {}  # name lookups run alongside the probing, not inside it
+
+        def lookup(ip: str) -> None:
+            lookups.setdefault(ip, asyncio.create_task(self._resolve(ip)))
 
         async def one(ip: str) -> None:
             async with sem:
                 r = await self._probe(ip, ports)
-                if r.status == "used":
-                    r.hostname = await self._resolve(ip)
+                if r.status == "online":
+                    lookup(ip)  # slow, so it must not hold a probe slot
+                self._apply_known(r, known.get(ip))
                 scan.results.append(r)
                 scan.done += 1
 
         try:
             await asyncio.gather(*(one(ip) for ip in hosts))
-            # MAC addresses come from the ARP cache, which the probes above just filled in.
-            macs = await self._arp()
-            for r in scan.results:
-                mac = macs.get(r.ip) if r.status == "used" else None
-                if mac:
-                    r.mac, r.mac_private, r.vendor = mac, is_private_mac(mac), vendor_for(mac)
+            scan.phase = "naming"
+            changed = await self._add_arp(scan, lookup)
+            by_ip = {r.ip: r for r in scan.results}
+            names = await asyncio.gather(*lookups.values(), return_exceptions=True)  # a failed lookup is just "no name"
+            for ip, name in zip(lookups, names):
+                if isinstance(name, str) and name and by_ip[ip].hostname != name:
+                    by_ip[ip].hostname, changed = name, True
+            if changed:
+                scan.version += 1  # rows the client already has were revised: it must re-read them all
+            await self._remember(scan)
             scan.state = "done"
         except asyncio.CancelledError:
             scan.state = "cancelled"
         except Exception as exc:
             log.exception("scan %s failed", scan.id)
             scan.state, scan.error = "failed", str(exc) or exc.__class__.__name__
+        finally:
+            for t in lookups.values():
+                t.cancel()  # a no-op for finished ones; stops stragglers if the scan was cancelled or failed
+
+    async def _load_known(self, hosts: list[str]) -> dict:
+        if self.db is None:
+            return {}
+        try:
+            return await self.db.known_hosts(hosts)
+        except Exception:  # remembering is a bonus: a database hiccup must not stop a scan
+            log.exception("could not load remembered devices")
+            return {}
+
+    @staticmethod
+    def _apply_known(r: HostResult, k) -> None:
+        """Fill in what we remember about this address. An unanswered known address is offline, not free."""
+        if k is None:
+            return
+        r.known, r.label, r.last_seen = True, k["label"], k["last_seen"]
+        if r.status != "online":
+            r.status = "offline"
+            r.hostname, r.mac, r.vendor = k["hostname"], k["mac"], k["vendor"]
+            r.mac_private = bool(k["mac"]) and is_private_mac(k["mac"])
+        else:
+            r.hostname = r.hostname or k["hostname"]
+
+    async def _add_arp(self, scan: Scan, lookup) -> bool:
+        """MAC addresses come from the ARP cache, which the probes just filled in.
+
+        A device on our own subnet answers ARP even when its firewall drops pings and connections, so an
+        address with an ARP entry is online even if every probe was ignored. Returns True if any row changed.
+        """
+        macs = await self._arp()
+        changed = False
+        for r in scan.results:
+            mac = macs.get(r.ip)
+            if not mac:
+                continue
+            if r.status != "online":
+                r.status, r.via, r.latency_ms = "online", "arp", None
+                lookup(r.ip)
+            r.mac, r.mac_private, r.vendor = mac, is_private_mac(mac), vendor_for(mac)
+            changed = True
+        return changed
+
+    async def _remember(self, scan: Scan) -> None:
+        if self.db is None:
+            return
+        seen = [(r.ip, r.mac, r.hostname, r.vendor) for r in scan.results if r.status == "online"]
+        if not seen:
+            return
+        try:
+            await self.db.save_seen(seen)
+        except Exception:
+            log.exception("could not save scan results")
