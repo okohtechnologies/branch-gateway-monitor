@@ -40,6 +40,7 @@ FIELDS: dict[str, Field] = {
         # alerts and data
         Field("reminder_minutes", "int", 0, 1440),
         Field("retention_days", "int", 0, 3650),
+        Field("weekly_report_enabled", "bool"),
         Field("default_latency_warn_ms", "float", 1, 60000),
         Field("default_loss_warn_pct", "float", 0, 100),
     )

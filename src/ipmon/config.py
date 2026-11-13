@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     reminder_minutes: int = 30  # 0 disables reminders (FR-13)
     retention_days: int = 30  # raw checks older than this are deleted; 0 keeps everything
     bot_enabled: bool = True
+    weekly_report_enabled: bool = True  # Monday 08:00 uptime summary to Telegram
     # Dead-man's-switch ping URL, e.g. https://hc-ping.com/<uuid>. Unset disables it.
     heartbeat_url: str | None = None
     heartbeat_interval_s: int = 60

@@ -500,5 +500,33 @@ class Database:
         )
 
 
+    # --- weekly report ---------------------------------------------------------------
+
+    async def report_checks(self, since: datetime, until: datetime) -> dict[int, tuple[int, int]]:
+        """{branch_id: (checks, checks that were not DOWN)} for the period."""
+        rows = await self.pool.fetch(
+            """
+            SELECT branch_id, count(*) AS total, count(*) FILTER (WHERE status <> 'DOWN') AS up
+            FROM checks WHERE branch_id IS NOT NULL AND ts >= $1 AND ts < $2
+            GROUP BY branch_id
+            """,
+            since, until,
+        )
+        return {r["branch_id"]: (r["total"], r["up"]) for r in rows}
+
+    async def report_incidents(self, since: datetime, until: datetime) -> list[asyncpg.Record]:
+        """Incidents that overlap the period, including ones still open."""
+        return await self.pool.fetch(
+            """
+            SELECT branch_id, severity, started_at, ended_at FROM incidents
+            WHERE started_at < $2 AND COALESCE(ended_at, $2) > $1
+            """,
+            since, until,
+        )
+
+    async def last_notification_at(self, kind: str) -> datetime | None:
+        return await self.pool.fetchval("SELECT max(sent_at) FROM notifications WHERE kind = $1", kind)
+
+
 class DuplicateName(Exception):
     """A branch with this name already exists."""
