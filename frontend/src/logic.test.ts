@@ -9,7 +9,9 @@ import {
   filterIncidents,
   humanSeconds,
   isChanged,
+  countScan,
   filterScan,
+  hostName,
   ipToNumber,
   isStale,
   monitoringExplanation,
@@ -27,6 +29,8 @@ import {
   summarizeIncidents,
   toChartPoints,
   toDraft,
+  withLabel,
+  withoutMemory,
   validateBranchInput,
   worstProbeSeconds,
   type ChartPoint,
@@ -422,13 +426,14 @@ describe("password change form", () => {
 });
 
 describe("scanner helpers", () => {
-  const host = (ip: string, status: "used" | "free", extra: Partial<ScanHost> = {}): ScanHost => ({
-    ip, status, latency_ms: null, ports: [], hostname: null, mac: null, vendor: null, mac_private: false, ...extra,
+  const host = (ip: string, status: ScanHost["status"], extra: Partial<ScanHost> = {}): ScanHost => ({
+    ip, status, latency_ms: null, ports: [], hostname: null, mac: null, vendor: null, mac_private: false,
+    via: null, label: null, known: false, last_seen: null, ...extra,
   });
   const rows = [
-    host("10.0.0.10", "used", { hostname: "Printer", mac: "AA:BB:CC:00:00:10" }),
+    host("10.0.0.10", "online", { hostname: "Printer", mac: "AA:BB:CC:00:00:10" }),
     host("10.0.0.9", "free"),
-    host("10.0.0.2", "used", { hostname: "router" }),
+    host("10.0.0.2", "offline", { hostname: "router", known: true }),
   ];
 
   it("converts addresses to numbers that sort numerically", () => {
@@ -438,18 +443,42 @@ describe("scanner helpers", () => {
   it("sorts by IP, not as text", () => {
     expect(filterScan(rows, "all", "").map((r) => r.ip)).toEqual(["10.0.0.2", "10.0.0.9", "10.0.0.10"]);
   });
-  it("filters by status", () => {
-    expect(filterScan(rows, "used", "").map((r) => r.ip)).toEqual(["10.0.0.2", "10.0.0.10"]);
+  it("filters by each of the three states", () => {
+    expect(filterScan(rows, "online", "").map((r) => r.ip)).toEqual(["10.0.0.10"]);
+    expect(filterScan(rows, "offline", "").map((r) => r.ip)).toEqual(["10.0.0.2"]);
     expect(filterScan(rows, "free", "").map((r) => r.ip)).toEqual(["10.0.0.9"]);
   });
-  it("searches IP, hostname and MAC case-insensitively", () => {
+  it("counts the three states", () => {
+    expect(countScan(rows)).toEqual({ online: 1, offline: 1, free: 1 });
+    expect(countScan([])).toEqual({ online: 0, offline: 0, free: 0 });
+  });
+  it("searches IP, name, label, MAC and maker case-insensitively", () => {
     expect(filterScan(rows, "all", "PRINT").map((r) => r.ip)).toEqual(["10.0.0.10"]);
     expect(filterScan(rows, "all", "aa:bb").map((r) => r.ip)).toEqual(["10.0.0.10"]);
     expect(filterScan(rows, "all", " 0.9 ").map((r) => r.ip)).toEqual(["10.0.0.9"]);
     expect(filterScan(rows, "all", "zzz")).toEqual([]);
+    const more = [host("10.0.0.1", "online", { vendor: "HUAWEI TECHNOLOGIES" }), host("10.0.0.3", "offline", { label: "Reception printer" })];
+    expect(filterScan(more, "all", "huawei").map((r) => r.ip)).toEqual(["10.0.0.1"]);
+    expect(filterScan(more, "all", "reception").map((r) => r.ip)).toEqual(["10.0.0.3"]);
   });
-  it("also searches the manufacturer", () => {
-    const withVendor = [host("10.0.0.1", "used", { vendor: "HUAWEI TECHNOLOGIES" }), host("10.0.0.2", "used")];
-    expect(filterScan(withVendor, "all", "huawei").map((r) => r.ip)).toEqual(["10.0.0.1"]);
+  it("shows the label ahead of the network name", () => {
+    expect(hostName(host("10.0.0.1", "online", { hostname: "pc", label: "Ada's laptop" }))).toBe("Ada's laptop");
+    expect(hostName(host("10.0.0.1", "online", { hostname: "pc" }))).toBe("pc");
+    expect(hostName(host("10.0.0.1", "free"))).toBeNull();
+  });
+  it("naming a free address marks it assigned; other states keep theirs", () => {
+    const out = withLabel(rows, "10.0.0.9", "Spare switch");
+    expect(out.find((r) => r.ip === "10.0.0.9")).toMatchObject({ status: "offline", label: "Spare switch", known: true });
+    expect(withLabel(rows, "10.0.0.10", "x").find((r) => r.ip === "10.0.0.10")?.status).toBe("online");
+    expect(withLabel(rows, "10.0.0.2", "x").find((r) => r.ip === "10.0.0.2")?.status).toBe("offline");
+    expect(rows[1].status).toBe("free"); // the input is not mutated
+  });
+  it("forgetting an offline address frees it; an online one only loses its name", () => {
+    const named = [host("10.0.0.2", "offline", { hostname: "router", mac: "AA:BB:CC:00:00:02", label: "Router", known: true, last_seen: "2026-01-01T00:00:00Z" }),
+                   host("10.0.0.10", "online", { hostname: "Printer", label: "Printer", known: true })];
+    const out = withoutMemory(named, "10.0.0.2");
+    expect(out[0]).toMatchObject({ status: "free", label: null, hostname: null, mac: null, known: false, last_seen: null });
+    const online = withoutMemory(named, "10.0.0.10")[1];
+    expect(online).toMatchObject({ status: "online", label: null, known: false, hostname: "Printer" });
   });
 });

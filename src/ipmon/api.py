@@ -28,7 +28,7 @@ from .notifier import TelegramNotifier
 from .probe import Target
 from .report import build_report, format_report
 from .runner import Monitor
-from .scanner import Busy, ScanManager, TargetError
+from .scanner import Busy, ScanManager, TargetError, parse_target
 from .validation import validate_host
 
 log = logging.getLogger(__name__)
@@ -57,6 +57,18 @@ class SettingsIn(BaseModel):
 
 class ScanIn(BaseModel):
     target: str = Field(min_length=1, max_length=64)
+
+
+class HostLabelIn(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+
+    @field_validator("label")
+    @classmethod
+    def _strip_label(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("name must not be blank")
+        return v
 
 
 class PasswordIn(BaseModel):
@@ -148,6 +160,7 @@ def create_app(
         if db is None:
             owned["db"] = await Database.connect(cfg.database_url)
         app.state.db = db or owned["db"]
+        scans.db = app.state.db
         if monitor is None:
             notifier = TelegramNotifier(cfg.telegram_bot_token, cfg.telegram_chat_id)
             owned["notifier"] = notifier
@@ -200,6 +213,7 @@ def create_app(
         app.state.settings, app.state.db, app.state.monitor = settings, db, monitor
         app.state.heartbeat = None
         app.state.scans = scans
+        scans.db = db
 
     async def session_user(cookies, app: FastAPI) -> dict | None:
         """The signed-in user, but only if the cookie is genuine AND its server-side session is still active.
@@ -352,17 +366,42 @@ def create_app(
         return scan.view()
 
     @app.get("/api/scans/{scan_id}")
-    async def get_scan(scan_id: str, request: Request, since: int = 0, _: dict = Depends(current_user)):
+    async def get_scan(scan_id: str, request: Request, since: int = 0, version: int | None = None,
+                       _: dict = Depends(current_user)):
         scan = request.app.state.scans.get(scan_id)
         if scan is None:
             raise HTTPException(404, "Scan not found")
-        return scan.view(since)
+        return scan.view(since, version)
 
     @app.post("/api/scans/{scan_id}/cancel")
     async def cancel_scan(scan_id: str, request: Request, _: dict = Depends(current_user)):
         if request.app.state.scans.get(scan_id) is None:
             raise HTTPException(404, "Scan not found")
         return {"cancelled": request.app.state.scans.cancel(scan_id)}
+
+    def scanner_ip(ip: str) -> str:
+        """A single, scannable address from the URL, or a readable 422."""
+        try:
+            hosts = parse_target(ip)
+        except TargetError as exc:
+            raise HTTPException(422, detail=[{"loc": ["path", "ip"], "msg": str(exc)}])
+        if len(hosts) != 1 or "/" in ip or "-" in ip:
+            raise HTTPException(422, detail=[{"loc": ["path", "ip"], "msg": "must be a single IP address"}])
+        return str(hosts[0])
+
+    @app.put("/api/scanner/hosts/{ip}")
+    async def name_host(ip: str, body: HostLabelIn, request: Request, _: dict = Depends(current_user)):
+        """Give an address a name. An address nobody ever saw becomes 'assigned' (shown as offline)."""
+        addr = scanner_ip(ip)
+        await request.app.state.db.set_host_label(addr, body.label)
+        return {"ip": addr, "label": body.label}
+
+    @app.delete("/api/scanner/hosts/{ip}", status_code=204)
+    async def forget_host(ip: str, request: Request, _: dict = Depends(current_user)):
+        """Forget everything remembered about an address, so it reads as free again until it answers."""
+        if not await request.app.state.db.forget_host(scanner_ip(ip)):
+            raise HTTPException(404, "Nothing is remembered about this address")
+        return Response(status_code=204)
 
     # --- settings -----------------------------------------------------------------
 

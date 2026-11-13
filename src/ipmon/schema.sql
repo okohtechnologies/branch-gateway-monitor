@@ -91,3 +91,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
     value      JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Devices the IP scanner has seen, or that someone marked as assigned. An address listed here that no
+-- longer answers is "offline" (assigned, just not on) rather than free.
+CREATE TABLE IF NOT EXISTS known_hosts (
+    ip         TEXT PRIMARY KEY,
+    mac        TEXT,
+    hostname   TEXT,
+    vendor     TEXT,
+    label      TEXT,
+    first_seen TIMESTAMPTZ,
+    last_seen  TIMESTAMPTZ
+);

@@ -106,7 +106,7 @@ async def test_probe_host_sees_open_port_and_refused_means_alive(monkeypatch):
     monkeypatch.setattr("ipmon.scanner._icmp", no_icmp)
     async with server:
         r = await probe_host("127.0.0.1", (open_port, closed_port), timeout=1)
-    assert r.status == "used"
+    assert r.status == "online"
     assert r.ports == [open_port]  # the refused port proves the host is up but is not "open"
 
 
@@ -129,7 +129,7 @@ def manager(used=("10.0.0.2", "10.0.0.4"), gate=None):
     async def probe(ip, ports):
         if gate:
             await gate.wait()
-        return HostResult(ip, "used" if ip in used else "free", 1.5 if ip in used else None, [80] if ip in used else [])
+        return HostResult(ip, "online" if ip in used else "free", 1.5 if ip in used else None, [80] if ip in used else [])
 
     async def resolve(ip):
         return f"host-{ip.split('.')[-1]}"
@@ -148,12 +148,12 @@ async def finish(m, scan):
     raise AssertionError("scan did not finish")
 
 
-async def test_scan_collects_used_and_free_with_names_and_macs():
+async def test_scan_collects_online_and_free_with_names_and_macs():
     m = manager()
     scan = m.start("10.0.0.0/29")
     await finish(m, scan)
     v = scan.view()
-    assert (v["state"], v["total"], v["done"], v["used"], v["free"]) == ("done", 6, 6, 2, 4)
+    assert (v["state"], v["total"], v["done"], v["online"], v["offline"], v["free"]) == ("done", 6, 6, 2, 0, 4)
     by_ip = {r["ip"]: r for r in v["results"]}
     assert by_ip["10.0.0.2"]["hostname"] == "host-2" and by_ip["10.0.0.2"]["mac"] == "10:C3:AB:00:00:02"
     assert "HUAWEI" in by_ip["10.0.0.2"]["vendor"] and by_ip["10.0.0.2"]["mac_private"] is False
@@ -236,7 +236,7 @@ async def test_scan_flow_over_api(client):
         if body["state"] != "running":
             break
         await asyncio.sleep(0.01)
-    assert body["state"] == "done" and body["used"] == 2 and len(body["results"]) == 6
+    assert body["state"] == "done" and body["online"] == 2 and len(body["results"]) == 6
 
 
 async def test_bad_target_is_a_readable_422(client):
