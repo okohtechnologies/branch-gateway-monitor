@@ -9,6 +9,8 @@ import {
   filterIncidents,
   humanSeconds,
   isChanged,
+  filterScan,
+  ipToNumber,
   isStale,
   monitoringExplanation,
   outageSegments,
@@ -31,7 +33,7 @@ import {
   type IncidentFilters,
 } from "./logic";
 import { fmtAge } from "./format";
-import type { Branch, BranchInput, Incident, Point, SettingLimit, Status } from "./types";
+import type { Branch, BranchInput, Incident, Point, ScanHost, SettingLimit, Status } from "./types";
 
 const branch = (name: string, status: Status, extra: Partial<Branch> = {}): Branch => ({
   id: Math.abs(name.split("").reduce((a, c) => a * 31 + c.charCodeAt(0), 7)) % 10000,
@@ -416,5 +418,38 @@ describe("password change form", () => {
     expect(checkPasswordChange("same-password-1", "same-password-1", "same-password-1").next).toContain("different");
     expect(checkPasswordChange("old", "a-much-longer-new-one", "a-much-longer-new-on").repeat).toContain("do not match");
     expect(checkPasswordChange("old", "x".repeat(257), "x".repeat(257)).next).toBe("Use 256 characters or fewer.");
+  });
+});
+
+describe("scanner helpers", () => {
+  const host = (ip: string, status: "used" | "free", extra: Partial<ScanHost> = {}): ScanHost => ({
+    ip, status, latency_ms: null, ports: [], hostname: null, mac: null, vendor: null, mac_private: false, ...extra,
+  });
+  const rows = [
+    host("10.0.0.10", "used", { hostname: "Printer", mac: "AA:BB:CC:00:00:10" }),
+    host("10.0.0.9", "free"),
+    host("10.0.0.2", "used", { hostname: "router" }),
+  ];
+
+  it("converts addresses to numbers that sort numerically", () => {
+    expect(ipToNumber("10.0.0.9")).toBeLessThan(ipToNumber("10.0.0.10"));
+    expect(ipToNumber("0.0.1.0")).toBe(256);
+  });
+  it("sorts by IP, not as text", () => {
+    expect(filterScan(rows, "all", "").map((r) => r.ip)).toEqual(["10.0.0.2", "10.0.0.9", "10.0.0.10"]);
+  });
+  it("filters by status", () => {
+    expect(filterScan(rows, "used", "").map((r) => r.ip)).toEqual(["10.0.0.2", "10.0.0.10"]);
+    expect(filterScan(rows, "free", "").map((r) => r.ip)).toEqual(["10.0.0.9"]);
+  });
+  it("searches IP, hostname and MAC case-insensitively", () => {
+    expect(filterScan(rows, "all", "PRINT").map((r) => r.ip)).toEqual(["10.0.0.10"]);
+    expect(filterScan(rows, "all", "aa:bb").map((r) => r.ip)).toEqual(["10.0.0.10"]);
+    expect(filterScan(rows, "all", " 0.9 ").map((r) => r.ip)).toEqual(["10.0.0.9"]);
+    expect(filterScan(rows, "all", "zzz")).toEqual([]);
+  });
+  it("also searches the manufacturer", () => {
+    const withVendor = [host("10.0.0.1", "used", { vendor: "HUAWEI TECHNOLOGIES" }), host("10.0.0.2", "used")];
+    expect(filterScan(withVendor, "all", "huawei").map((r) => r.ip)).toEqual(["10.0.0.1"]);
   });
 });

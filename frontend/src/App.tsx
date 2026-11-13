@@ -8,6 +8,7 @@ import { Login } from "./pages/Login";
 import { Overview } from "./pages/Overview";
 import { Branches } from "./pages/Branches";
 import { Incidents } from "./pages/Incidents";
+import { Scanner } from "./pages/Scanner";
 import { Settings } from "./pages/Settings";
 
 // Charts are the heaviest dependency: only load them when a branch page is opened.
@@ -33,6 +34,7 @@ function Gate() {
             }
           />
           <Route path="incidents" element={<Incidents />} />
+          <Route path="scanner" element={<Scanner />} />
           <Route path="settings" element={<Settings />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

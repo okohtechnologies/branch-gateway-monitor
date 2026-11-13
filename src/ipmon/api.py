@@ -26,7 +26,9 @@ from .health import check_health
 from .heartbeat import Heartbeat
 from .notifier import TelegramNotifier
 from .probe import Target
+from .report import build_report, format_report
 from .runner import Monitor
+from .scanner import Busy, ScanManager, TargetError
 from .validation import validate_host
 
 log = logging.getLogger(__name__)
@@ -51,6 +53,10 @@ class SettingsIn(BaseModel):
     """Changes to apply. A value of null resets that setting to its default."""
 
     values: dict[str, Any]
+
+
+class ScanIn(BaseModel):
+    target: str = Field(min_length=1, max_length=64)
 
 
 class PasswordIn(BaseModel):
@@ -123,8 +129,10 @@ def create_app(
     monitor: Monitor | None = None,
     run_monitor: bool = True,
     static_dir: Path | None = None,
+    scanner: ScanManager | None = None,
 ) -> FastAPI:
     owned: dict = {}
+    scans = scanner or ScanManager()
     started_at = time.monotonic()
 
     async def _healthy(app: FastAPI) -> bool:
@@ -136,6 +144,7 @@ def create_app(
     async def lifespan(app: FastAPI):
         cfg = settings or Settings()
         app.state.settings = cfg
+        app.state.scans = scans
         if db is None:
             owned["db"] = await Database.connect(cfg.database_url)
         app.state.db = db or owned["db"]
@@ -173,6 +182,7 @@ def create_app(
         try:
             yield
         finally:
+            await scans.shutdown()
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -189,6 +199,7 @@ def create_app(
     if db is not None and monitor is not None and settings is not None:
         app.state.settings, app.state.db, app.state.monitor = settings, db, monitor
         app.state.heartbeat = None
+        app.state.scans = scans
 
     async def session_user(cookies, app: FastAPI) -> dict | None:
         """The signed-in user, but only if the cookie is genuine AND its server-side session is still active.
@@ -328,6 +339,31 @@ def create_app(
         rows = await request.app.state.db.incidents(branch_id, open_only, max(1, min(limit, 500)))
         return {"incidents": [_incident_dict(r) for r in rows]}
 
+    # --- ip scanner -----------------------------------------------------------------
+
+    @app.post("/api/scans", status_code=201)
+    async def start_scan(body: ScanIn, request: Request, _: dict = Depends(current_user)):
+        try:
+            scan = request.app.state.scans.start(body.target)
+        except TargetError as exc:
+            raise HTTPException(422, detail=[{"loc": ["body", "target"], "msg": str(exc)}])
+        except Busy:
+            raise HTTPException(409, "A scan is already running. Wait for it to finish or cancel it.")
+        return scan.view()
+
+    @app.get("/api/scans/{scan_id}")
+    async def get_scan(scan_id: str, request: Request, since: int = 0, _: dict = Depends(current_user)):
+        scan = request.app.state.scans.get(scan_id)
+        if scan is None:
+            raise HTTPException(404, "Scan not found")
+        return scan.view(since)
+
+    @app.post("/api/scans/{scan_id}/cancel")
+    async def cancel_scan(scan_id: str, request: Request, _: dict = Depends(current_user)):
+        if request.app.state.scans.get(scan_id) is None:
+            raise HTTPException(404, "Scan not found")
+        return {"cancelled": request.app.state.scans.cancel(scan_id)}
+
     # --- settings -----------------------------------------------------------------
 
     async def settings_payload(app: FastAPI) -> dict:
@@ -393,7 +429,7 @@ def create_app(
 
     # --- telegram ------------------------------------------------------------------------
 
-    test_state = {"at": 0.0}
+    test_state = {"at": 0.0, "report_at": 0.0}
 
     @app.get("/api/telegram")
     async def telegram_status(request: Request, _: dict = Depends(current_user)):
@@ -426,6 +462,19 @@ def create_app(
             "\u2705 Test message from Branch Monitor. If you can read this, alerts will reach you."
         )
         await request.app.state.db.record_notification(None, "TEST", "telegram", ok, err)
+        return {"ok": ok, "error": err}
+
+    @app.post("/api/report/send")
+    async def send_report_now(request: Request, _: dict = Depends(current_user)):
+        """Send the weekly report right now. Does not count as the scheduled one."""
+        now = time.monotonic()
+        if now - test_state["report_at"] < 5:
+            raise HTTPException(429, "Wait a few seconds before sending another report.", headers={"Retry-After": "5"})
+        test_state["report_at"] = now
+        mon: Monitor = request.app.state.monitor
+        text = format_report(await build_report(request.app.state.db, datetime.now(timezone.utc)))
+        ok, err = await mon.notifier.send(text)
+        await request.app.state.db.record_notification(None, "REPORT_MANUAL", "telegram", ok, err)
         return {"ok": ok, "error": err}
 
     # --- account ---------------------------------------------------------------------------

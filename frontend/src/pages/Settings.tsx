@@ -25,6 +25,7 @@ import type { MonitorStatus, SettingValue, SettingsData, TelegramStatus } from "
 const SECTIONS = [
   { id: "monitoring", label: "Monitoring" },
   { id: "alerts", label: "Alerts and data" },
+  { id: "report", label: "Weekly report" },
   { id: "telegram", label: "Telegram" },
   { id: "health", label: "Monitor health" },
   { id: "account", label: "Account" },
@@ -75,6 +76,7 @@ export function Settings() {
             <>
               <MonitoringSection data={data} onSaved={setData} />
               <AlertsSection data={data} onSaved={setData} />
+              <ReportSection data={data} onSaved={setData} />
             </>
           )}
           <TelegramSection />
@@ -347,6 +349,49 @@ function AlertsSection({ data, onSaved }: { data: SettingsData; onSaved: (d: Set
           </div>
           <NumberField form={form} data={data} name="default_latency_warn_ms" label="New branches warn above" unit="ms" step="any" help="Pre-filled when you add a branch. Existing branches keep their own value." />
           <NumberField form={form} data={data} name="default_loss_warn_pct" label="New branches warn above loss" unit="%" step="any" help="Same, for packet loss." />
+        </div>
+        <SaveBar form={form} />
+      </form>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Weekly report
+// ---------------------------------------------------------------------------------------------
+
+const REPORT_KEYS = ["weekly_report_enabled"];
+
+function ReportSection({ data, onSaved }: { data: SettingsData; onSaved: (d: SettingsData) => void }) {
+  const toast = useToast();
+  const form = useSettingsForm(data, REPORT_KEYS, () => REPORT_KEYS, onSaved);
+  const [sending, setSending] = useState(false);
+
+  const sendNow = async () => {
+    setSending(true);
+    try {
+      const r = await api.sendReport();
+      if (r.ok) toast.success("Report sent. Check Telegram.");
+      else toast.error(`Telegram did not accept the report: ${r.error ?? "unknown error"}`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : "Could not send the report.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Card id="report" title="Weekly report" intro="A summary of the last 7 days sent to Telegram every Monday at 08:00 (the server's time zone): uptime per branch, incidents and downtime, worst first.">
+      <form ref={form.formRef} onSubmit={form.save} noValidate className="space-y-4">
+        <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium">
+          <input type="checkbox" className="size-5 cursor-pointer accent-[var(--primary)]" checked={Boolean(form.draft.weekly_report_enabled)} onChange={(e) => form.set("weekly_report_enabled", e.target.checked)} />
+          Send the weekly report
+        </label>
+        <div>
+          <button type="button" className="btn btn-secondary" onClick={sendNow} disabled={sending}>
+            <Send className="size-4" aria-hidden /> {sending ? "Sending…" : "Send a report now"}
+          </button>
+          <p className="mt-1.5 text-xs text-muted">Sends the current report immediately. It does not replace Monday's.</p>
         </div>
         <SaveBar form={form} />
       </form>

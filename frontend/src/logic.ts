@@ -1,5 +1,5 @@
 /** Pure helpers behind the screens. No React, no I/O: everything here is unit-tested. */
-import type { Branch, BranchInput, Incident, Point, SettingLimit, SettingValue, SparkPoint, Status } from "./types";
+import type { Branch, BranchInput, Incident, Point, ScanHost, SettingLimit, SettingValue, SparkPoint, Status } from "./types";
 
 export type StatusFilter = "all" | "down" | "degraded" | "up" | "pending" | "disabled";
 export const STATUS_FILTERS: readonly StatusFilter[] = ["all", "down", "degraded", "up", "pending", "disabled"];
@@ -362,4 +362,20 @@ export function checkPasswordChange(current: string, next: string, repeat: strin
   else if (current && next === current) e.next = "Choose a different password from the current one.";
   if (repeat !== next) e.repeat = "The two new passwords do not match.";
   return e;
+}
+
+/** Numeric value of a dotted IPv4 address, so "10.0.0.9" sorts before "10.0.0.10". */
+export function ipToNumber(ip: string): number {
+  return ip.split(".").reduce((n, part) => n * 256 + (Number(part) || 0), 0);
+}
+
+export type ScanFilter = "all" | "used" | "free";
+
+/** Rows matching the filter and search text (IP, hostname or MAC), in IP order. */
+export function filterScan(rows: ScanHost[], filter: ScanFilter, query: string): ScanHost[] {
+  const q = query.trim().toLowerCase();
+  return rows
+    .filter((r) => filter === "all" || r.status === filter)
+    .filter((r) => !q || r.ip.includes(q) || (r.hostname ?? "").toLowerCase().includes(q) || (r.mac ?? "").toLowerCase().includes(q) || (r.vendor ?? "").toLowerCase().includes(q))
+    .sort((a, b) => ipToNumber(a.ip) - ipToNumber(b.ip));
 }

@@ -119,3 +119,31 @@ export interface TelegramStatus {
   last_error: string | null;
   last_error_at: string | null;
 }
+
+export interface ScanHost {
+  ip: string;
+  status: "used" | "free";
+  latency_ms: number | null;
+  ports: number[];
+  hostname: string | null;
+  mac: string | null;
+  /** Manufacturer from the MAC prefix; null when unknown or the address is randomized. */
+  vendor: string | null;
+  /** A randomized "private" MAC, as phones and many laptops use. */
+  mac_private: boolean;
+}
+
+export interface ScanView {
+  id: string;
+  target: string;
+  state: "running" | "done" | "cancelled" | "failed";
+  error: string | null;
+  total: number;
+  done: number;
+  used: number;
+  free: number;
+  elapsed_s: number;
+  /** Pass back as `since` to receive only rows added after this one. */
+  next: number;
+  results: ScanHost[];
+}

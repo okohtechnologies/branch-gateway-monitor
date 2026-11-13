@@ -25,6 +25,7 @@ from .notifier import (
     format_transition,
 )
 from .probe import Target, probe_all
+from .report import build_report, format_report, last_due
 
 log = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class Monitor:
         probe_fn=probe_all,
         reminder_minutes: int | None = 30,
         retention_days: int | None = 30,
+        report_enabled: bool = True,
     ):
         self.db = db
         self.notifier = notifier
@@ -53,6 +55,8 @@ class Monitor:
         self._probe_fn = probe_fn
         self.reminder_minutes = reminder_minutes
         self.retention_days = retention_days
+        self.report_enabled = report_enabled
+        self._started_at = datetime.now(timezone.utc)  # a fresh install waits for the NEXT scheduled report
         self._last_prune: float | None = None
         self.engine = Engine(confirm)
         self.latest: dict[int, dict] = {}  # branch_id -> last probe snapshot
@@ -71,6 +75,7 @@ class Monitor:
         self.probe_timeout = float(values["probe_timeout_s"])
         self.reminder_minutes = int(values["reminder_minutes"]) or None
         self.retention_days = int(values["retention_days"]) or None
+        self.report_enabled = bool(values["weekly_report_enabled"])
         self.engine.set_confirm(int(values["confirm"]))
         canary = (
             Target(None, values["canary_host"], values["canary_type"], int(values["canary_port"]))
@@ -134,6 +139,10 @@ class Monitor:
             try:
                 await self.maybe_prune()
                 await self.run_cycle()
+                try:
+                    await self.maybe_send_report()
+                except Exception:
+                    log.exception("weekly report failed; will try again next cycle")
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -144,6 +153,21 @@ class Monitor:
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+
+    async def maybe_send_report(self, now: datetime | None = None) -> bool:
+        """Send the weekly report once per scheduled time.
+
+        'Last sent' comes from the notifications log, so a restart neither repeats a report nor skips
+        one: if the monitor was off at the scheduled time, the report goes out when it is back.
+        """
+        if not self.report_enabled:
+            return False
+        now = now or datetime.now(timezone.utc)
+        last = await self.db.last_notification_at("WEEKLY_REPORT") or self._started_at
+        if last_due(now) <= last:
+            return False
+        await self._notify(None, "WEEKLY_REPORT", format_report(await build_report(self.db, now)))
+        return True
 
     # --- one cycle ------------------------------------------------------------
 
